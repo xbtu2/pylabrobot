@@ -35,6 +35,10 @@ pylabrobot.liquid\_handling.backends.hamilton.STAR\_backend.STAR
       ~STAR.head
       ~STAR.head96
       ~STAR.head96_installed
+      ~STAR.head96_y_drive_acceleration_default
+      ~STAR.head96_y_drive_speed_default
+      ~STAR.head96_z_drive_acceleration_default
+      ~STAR.head96_z_drive_speed_default
       ~STAR.iswap_gripper_drive_max_increment
       ~STAR.iswap_gripper_drive_min_increment
       ~STAR.iswap_gripper_drive_mm_per_increment
@@ -153,16 +157,28 @@ pylabrobot.liquid\_handling.backends.hamilton.STAR\_backend.STAR
       ~STAR.head96_dispensing_drive_move_to_position
       ~STAR.head96_dispensing_drive_request_position_mm
       ~STAR.head96_dispensing_drive_request_position_uL
+      ~STAR.head96_experimental_aspirate
+      ~STAR.head96_experimental_dispense
+      ~STAR.head96_move_stop_disk_z
       ~STAR.head96_move_to_coordinate
       ~STAR.head96_move_to_z_safety
+      ~STAR.head96_move_tool_z
       ~STAR.head96_move_x
       ~STAR.head96_move_y
       ~STAR.head96_move_z
       ~STAR.head96_park
+      ~STAR.head96_probe_z_using_clld
       ~STAR.head96_request_firmware_version
+      ~STAR.head96_request_last_lld_height
       ~STAR.head96_request_position
+      ~STAR.head96_request_stop_disk_z
+      ~STAR.head96_request_tip_length
       ~STAR.head96_request_tip_presence
       ~STAR.head96_request_type
+      ~STAR.head96_request_y_acceleration
+      ~STAR.head96_request_y_speed
+      ~STAR.head96_request_z_acceleration
+      ~STAR.head96_request_z_speed
       ~STAR.initialize_auto_load
       ~STAR.initialize_autoload
       ~STAR.initialize_core_96_head
@@ -209,6 +225,8 @@ pylabrobot.liquid\_handling.backends.hamilton.STAR\_backend.STAR
       ~STAR.load_carrier_from_tray_and_scan_carrier_barcode
       ~STAR.lock_cover
       ~STAR.measure_iswap_gripper_force
+      ~STAR.mix96
+      ~STAR.mix96_at_coordinate
       ~STAR.mm_to_y_drive_increment
       ~STAR.mm_to_z_drive_increment
       ~STAR.move_96head_to_coordinate
@@ -313,7 +331,6 @@ pylabrobot.liquid\_handling.backends.hamilton.STAR\_backend.STAR
       ~STAR.request_presence_of_carriers_on_deck
       ~STAR.request_presence_of_carriers_on_loading_tray
       ~STAR.request_presence_of_single_carrier_on_loading_tray
-      ~STAR.request_present_wrap_size_of_installed_arms
       ~STAR.request_probe_z_position
       ~STAR.request_pump_settings
       ~STAR.request_right_x_arm_last_collision_type
@@ -328,6 +345,7 @@ pylabrobot.liquid\_handling.backends.hamilton.STAR\_backend.STAR
       ~STAR.request_tip_presence_in_core_96_head
       ~STAR.request_verification_data
       ~STAR.request_volume_in_tip
+      ~STAR.request_working_envelopes_per_arm
       ~STAR.request_x_pos_channel_n
       ~STAR.request_xl_channel_validation_status
       ~STAR.request_y_pos_channel_n

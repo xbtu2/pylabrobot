@@ -27,8 +27,8 @@
   </noscript>
   
   <!-- Loaded before other Sphinx assets -->
-  <link href="../_static/styles/theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
-<link href="../_static/styles/pydata-sphinx-theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
 
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/mystnb.11b39860a7a0cbfd473a3ad8a317855267ff0bd372690045ca344a6b62be495e.css" />
@@ -36,10 +36,10 @@
     <link rel="stylesheet" type="text/css" href="../_static/plr_cards.css?v=ed9dfa64" />
   
   <!-- So that users can add custom icons -->
-  <script defer src="../_static/scripts/fontawesome.js?digest=0790524f97105ba85085"></script>
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
   <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
-<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../_static/documentation_options.js?v=3ce10a4d"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
@@ -48,7 +48,7 @@
     <script src="../_static/copybutton.js?v=f281be69"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'api/pylabrobot.centrifuge';</script>
     <script>
-        DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
+        DOCUMENTATION_OPTIONS.theme_version = '0.20.0';
         DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://docs.pylabrobot.org/dev/_static/switcher.json';
         DOCUMENTATION_OPTIONS.theme_switcher_version_match = 'dev';
         DOCUMENTATION_OPTIONS.show_version_warning_banner =
@@ -589,6 +589,20 @@
 </tbody>
 </table>
 </div>
+<section id="factory-functions">
+<h2>Factory functions<a class="headerlink" href="#factory-functions" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="_autosummary/pylabrobot.centrifuge.access2.Access2.html#pylabrobot.centrifuge.access2.Access2" title="pylabrobot.centrifuge.access2.Access2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">access2.Access2</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="_autosummary/pylabrobot.centrifuge.highres.microspin.MicroSpin.html#pylabrobot.centrifuge.highres.microspin.MicroSpin" title="pylabrobot.centrifuge.highres.microspin.MicroSpin"><code class="xref py py-obj docutils literal notranslate"><span class="pre">highres.microspin.MicroSpin</span></code></a></p></td>
+<td><p>Construct a HighRes Biosolutions MicroSpin centrifuge.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 <section id="backends">
 <h2>Backends<a class="headerlink" href="#backends" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="autosummary longtable table">
@@ -625,8 +639,22 @@
 <tr class="row-even"><td><p><a class="reference internal" href="_autosummary/pylabrobot.centrifuge.highres.microspin_backend.MicroSpinError.html#pylabrobot.centrifuge.highres.microspin_backend.MicroSpinError" title="pylabrobot.centrifuge.highres.microspin_backend.MicroSpinError"><code class="xref py py-obj docutils literal notranslate"><span class="pre">highres.microspin_backend.MicroSpinError</span></code></a></p></td>
 <td><p>Raised when the MicroSpin responds with <code class="docutils literal notranslate"><span class="pre">ERROR!</span></code> to a command.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="_autosummary/pylabrobot.centrifuge.highres.microspin_backend.MicroSpinProtocolError.html#pylabrobot.centrifuge.highres.microspin_backend.MicroSpinProtocolError" title="pylabrobot.centrifuge.highres.microspin_backend.MicroSpinProtocolError"><code class="xref py py-obj docutils literal notranslate"><span class="pre">highres.microspin_backend.MicroSpinProtocolError</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="_autosummary/pylabrobot.centrifuge.highres.microspin_backend.MicroSpinAbortedError.html#pylabrobot.centrifuge.highres.microspin_backend.MicroSpinAbortedError" title="pylabrobot.centrifuge.highres.microspin_backend.MicroSpinAbortedError"><code class="xref py py-obj docutils literal notranslate"><span class="pre">highres.microspin_backend.MicroSpinAbortedError</span></code></a></p></td>
+<td><p>Raised when the MicroSpin terminates a command with <code class="docutils literal notranslate"><span class="pre">ABORTED!</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="_autosummary/pylabrobot.centrifuge.highres.microspin_backend.MicroSpinProtocolError.html#pylabrobot.centrifuge.highres.microspin_backend.MicroSpinProtocolError" title="pylabrobot.centrifuge.highres.microspin_backend.MicroSpinProtocolError"><code class="xref py py-obj docutils literal notranslate"><span class="pre">highres.microspin_backend.MicroSpinProtocolError</span></code></a></p></td>
 <td><p>Raised when the MicroSpin emits a response we cannot parse.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="testing-utilities">
+<h2>Testing utilities<a class="headerlink" href="#testing-utilities" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="_autosummary/pylabrobot.centrifuge.highres.mock_server.MicroSpinMockServer.html#pylabrobot.centrifuge.highres.mock_server.MicroSpinMockServer" title="pylabrobot.centrifuge.highres.mock_server.MicroSpinMockServer"><code class="xref py py-obj docutils literal notranslate"><span class="pre">highres.mock_server.MicroSpinMockServer</span></code></a></p></td>
+<td><p>A localhost TCP server that speaks the MicroSpin remote-control protocol.</p></td>
 </tr>
 </tbody>
 </table>
@@ -681,8 +709,10 @@
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#factory-functions">Factory functions</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#backends">Backends</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#errors">Errors</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#testing-utilities">Testing utilities</a></li>
 </ul>
   </nav></div>
 
@@ -724,8 +754,8 @@
   </div>
   
   <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085"></script>
-<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085"></script>
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
 
   <footer class="bd-footer">
 <div class="bd-footer__inner bd-page-width">
@@ -759,7 +789,7 @@
         <div class="footer-item">
 <p class="theme-version">
   <!-- # L10n: Setting the PST URL as an argument as this does not need to be localized -->
-  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.18.0.
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.20.0.
 </p></div>
       
     </div>

@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pylabrobot.resources.rotation import Rotation
+from pylabrobot.serializer import SerializableMixin
 from pylabrobot.utils.linalg import matrix_vector_multiply_3x3
 
 
 @dataclass
-class Coordinate:
+class Coordinate(SerializableMixin):
   """Represents coordinates. This is often used to represent the location of a :class:`~Resource`,
   relative to its parent resource.
   """
@@ -65,3 +66,7 @@ class Coordinate:
   def rotated(self, rotation: Rotation) -> Coordinate:
     """Rotate the coordinate by the given rotation around the origin."""
     return Coordinate(*matrix_vector_multiply_3x3(rotation.get_rotation_matrix(), self.vector()))
+
+  def copy(self) -> Coordinate:
+    """Return a copy of the coordinate."""
+    return Coordinate(self.x, self.y, self.z)

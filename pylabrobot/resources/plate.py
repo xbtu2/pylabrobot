@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from collections import OrderedDict
 from typing import (
   TYPE_CHECKING,
@@ -13,58 +14,17 @@ from typing import (
   cast,
 )
 
-from pylabrobot.resources.resource_holder import get_child_location
+from pylabrobot.resources.liquid import Liquid
 
 from .itemized_resource import ItemizedResource
-from .liquid import Liquid
+from .lid import Lid, Liddable
 from .resource import Coordinate, Resource
 
 if TYPE_CHECKING:
   from .well import Well
 
 
-class Lid(Resource):
-  """Lid for plates."""
-
-  def __init__(
-    self,
-    name: str,
-    size_x: float,
-    size_y: float,
-    size_z: float,
-    nesting_z_height: float,
-    category: str = "lid",
-    model: Optional[str] = None,
-  ):
-    """Create a lid for a plate.
-
-    Args:
-      name: Name of the lid.
-      size_x: Size of the lid in x-direction.
-      size_y: Size of the lid in y-direction.
-      size_z: Size of the lid in z-direction.
-      nesting_z_height: the overlap in mm between the lid and its parent plate (in the z-direction).
-    """
-    super().__init__(
-      name=name,
-      size_x=size_x,
-      size_y=size_y,
-      size_z=size_z,
-      category=category,
-      model=model,
-    )
-    self.nesting_z_height = nesting_z_height
-    if nesting_z_height == 0:
-      print(f"{self.name}: Are you certain that the lid nests 0 mm with its parent plate?")
-
-  def serialize(self) -> dict:
-    return {
-      **super().serialize(),
-      "nesting_z_height": self.nesting_z_height,
-    }
-
-
-class Plate(ItemizedResource["Well"]):
+class Plate(Liddable, ItemizedResource["Well"]):
   """Base class for Plate resources."""
 
   def __init__(
@@ -79,6 +39,7 @@ class Plate(ItemizedResource["Well"]):
     lid: Optional[Lid] = None,
     model: Optional[str] = None,
     plate_type: Literal["skirted", "semi-skirted", "non-skirted"] = "skirted",
+    stacking_z_height: Optional[float] = None,
   ):
     """Initialize a Plate resource.
 
@@ -87,7 +48,11 @@ class Plate(ItemizedResource["Well"]):
       well_size_y: Size of the wells in the y direction.
       lid: Immediately assign a lid to the plate.
       plate_type: Type of the plate. One of "skirted", "semi-skirted", or "non-skirted". A
-        WIP: https://github.com/PyLabRobot/pylabrobot/pull/152#discussion_r1625831517
+        more complete description is still pending.
+      stacking_z_height: The vertical pitch in mm between two identical plates stacked directly on
+        top of each other (i.e. the height a plate adds to a stack, equal to ``size_z`` minus the
+        overlap with the plate below). Required by some stacker devices (e.g. the Agilent BenchCel)
+        and left as ``None`` when unknown.
     """
 
     super().__init__(
@@ -100,27 +65,11 @@ class Plate(ItemizedResource["Well"]):
       category=category,
       model=model,
     )
-    self._lid: Optional[Lid] = None
     self.plate_type = plate_type
+    self.stacking_z_height = stacking_z_height
 
     if lid is not None:
       self.assign_child_resource(lid)
-
-  @property
-  def lid(self) -> Optional[Lid]:
-    return self._lid
-
-  @lid.setter
-  def lid(self, lid: Optional[Lid]) -> None:
-    if lid is None:
-      self.unassign_child_resource(self._lid)
-    else:
-      self.assign_child_resource(lid)
-    self._lid = lid
-
-  def get_lid_location(self, lid: Lid) -> Coordinate:
-    """Get location of the lid when assigned to the plate. Takes into account sinking and rotation."""
-    return get_child_location(lid) + Coordinate(0, 0, self.get_size_z() - lid.nesting_z_height)
 
   def assign_child_resource(
     self,
@@ -128,25 +77,35 @@ class Plate(ItemizedResource["Well"]):
     location: Optional[Coordinate] = None,
     reassign: bool = True,
   ):
-    if isinstance(resource, Lid):
-      if self.has_lid():
-        raise ValueError(f"Plate '{self.name}' already has a lid.")
-      self._lid = resource
-      default_location = self.get_lid_location(resource)
-      location = location or default_location
-    else:
-      assert location is not None, "Location must be specified for if resource is not a lid."
+    if not isinstance(resource, Lid) and location is None:
+      raise ValueError("Location must be specified if resource is not a lid.")
     return super().assign_child_resource(resource, location=location, reassign=reassign)
 
-  def unassign_child_resource(self, resource):
-    if isinstance(resource, Lid) and resource == self.lid:
-      self._lid = None
-    return super().unassign_child_resource(resource)
+  def serialize(self) -> dict:
+    return {
+      **super().serialize(),
+      "plate_type": self.plate_type,
+      "stacking_z_height": self.stacking_z_height,
+    }
+
+  def __eq__(self, other) -> bool:
+    # `stacking_z_height` is a physical dimension (the pitch a plate adds to a stack), so plates
+    # that differ in it are different labware and must not compare equal.
+    return (
+      super().__eq__(other)
+      and isinstance(other, Plate)
+      and self.stacking_z_height == other.stacking_z_height
+    )
+
+  # Defining `__eq__` sets `__hash__` to None; restore the `Resource` (repr-based) hash. Equal
+  # plates share the same repr, so the hash/eq invariant holds.
+  __hash__ = Resource.__hash__
 
   def __repr__(self) -> str:
     return (
       f"{self.__class__.__name__}(name={self.name!r}, size_x={self._size_x}, "
-      f"size_y={self._size_y}, size_z={self._size_z}, location={self.location})"
+      f"size_y={self._size_y}, size_z={self._size_z}, "
+      f"stacking_z_height={self.stacking_z_height}, location={self.location})"
     )
 
   def get_well(self, identifier: Union[str, int, Tuple[int, int]]) -> "Well":
@@ -165,8 +124,23 @@ class Plate(ItemizedResource["Well"]):
 
     return super().get_items(identifier)
 
-  def has_lid(self) -> bool:
-    return self.lid is not None
+  def set_well_volumes(
+    self,
+    volumes: List[float],
+  ) -> None:
+    """Fill all wells in the plate with a given volume.
+
+    Args:
+      volumes: The volume to fill each well with, in uL.
+    """
+
+    if not len(volumes) == self.num_items:
+      raise ValueError(
+        f"Length of volumes ({len(volumes)}) does not match number of wells ({self.num_items})."
+      )
+
+    for well, volume in zip(self.get_all_items(), volumes):
+      well.set_volume(volume)
 
   def set_well_liquids(
     self,
@@ -175,24 +149,13 @@ class Plate(ItemizedResource["Well"]):
       List[Tuple[Optional["Liquid"], Union[int, float]]],
       Tuple[Optional["Liquid"], Union[int, float]],
     ],
-  ) -> None:
-    """Update the liquid in the volume tracker for each well in the plate.
-
-    Args:
-      liquids: A list of liquids, one for each well in the plate. The list can be a list of lists,
-        where each inner list contains the liquids for each well in a column. If a single tuple is
-        given, the volume is assumed to be the same for all wells. Liquids are in uL.
-
-    Raises:
-      ValueError: If the number of liquids does not match the number of wells in the plate.
-
-    Example:
-      Set the volume of each well in a 96-well plate to 10 uL.
-
-      >>> plate = Plate("plate", 127.76, 85.48, 14.5, num_items_x=12, num_items_y=8)
-      >>> plate.set_well_liquids((Liquid.WATER, 10))
-    """
-
+  ):
+    """Deprecated: Use `set_well_volumes` instead."""
+    warnings.warn(
+      "set_well_liquids is deprecated and will be removed in a future version. "
+      "Use set_well_volumes instead.",
+      FutureWarning,
+    )
     if isinstance(liquids, tuple):
       liquids = [liquids] * self.num_items
     elif isinstance(liquids, list) and all(isinstance(column, list) for column in liquids):
@@ -201,15 +164,7 @@ class Plate(ItemizedResource["Well"]):
       liquids = [list(column) for column in zip(*liquids)]  # transpose the list of lists
       liquids = [volume for column in liquids for volume in column]  # flatten the list of lists
 
-    if len(liquids) != self.num_items:
-      raise ValueError(
-        f"Number of liquids ({len(liquids)}) does not match number of wells "
-        f"({self.num_items}) in plate '{self.name}'."
-      )
-
-    for i, (liquid, volume) in enumerate(liquids):
-      well = self.get_well(i)
-      well.tracker.set_liquids([(liquid, volume)])  # type: ignore
+    self.set_well_volumes([volume for _, volume in liquids])  # type: ignore
 
   def disable_volume_trackers(self) -> None:
     """Disable volume tracking for all wells in the plate."""
@@ -308,3 +263,7 @@ class Plate(ItemizedResource["Well"]):
       wells.sort(key=lambda well: (well.location.x, -well.location.y))  # type: ignore
 
     return wells
+
+  def check_can_drop_resource_here(self, resource: Resource, *, reassign: bool = True) -> None:
+    if not isinstance(resource, Lid):
+      raise RuntimeError(f"Can only drop Lid resources onto Plate '{self.name}'.")

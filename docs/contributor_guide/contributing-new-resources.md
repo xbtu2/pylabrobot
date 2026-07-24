@@ -1,4 +1,4 @@
-# Contributing new resources
+# Contributing New Resources
 
 PyLabRobot ships with a growing library of resource definitions for common labware.
 If you define a new resource it helps the community when you contribute it back.
@@ -59,6 +59,10 @@ def AGenBio_96_wellplate_Ub_2200ul(name: str, lid: Optional[Lid] = None) -> Plat
     size_x=127.76,  # from spec
     size_y=85.48,  # from spec
     size_z=42.5,   # from spec
+    # Optional: the vertical pitch one plate adds to a stack of identical plates
+    # (size_z minus how far two identical plates nest). Only needed by plate
+    # stackers (e.g. the Agilent BenchCel); leave unset (None) otherwise.
+    stacking_z_height=39.0,  # measured
     ...
   )
 ````

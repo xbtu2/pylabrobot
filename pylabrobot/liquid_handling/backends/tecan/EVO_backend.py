@@ -74,6 +74,7 @@ class TecanLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
 
     super().__init__()
     self.io = USB(
+      human_readable_device_name="Tecan EVO",
       packet_read_timeout=packet_read_timeout,
       read_timeout=read_timeout,
       write_timeout=write_timeout,
@@ -121,7 +122,7 @@ class TecanLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
         continue
       # RoMa(C1) and LiHa(C5) should only have integer values
       # MCA can return both integers and strings
-      data.append(int(x) if x.isdigit() else x)
+      data.append(int(x) if x.lstrip("-").isdigit() else x)
 
     return {"module": module, "data": data}
 
@@ -364,7 +365,7 @@ class EVOBackend(TecanLiquidHandler):
     tecan_liquid_classes = [
       get_liquid_class(
         target_volume=op.volume,
-        liquid_class=op.liquids[-1][0] or Liquid.WATER,
+        liquid_class=Liquid.WATER,
         tip_type=op.tip.tip_type,
       )
       if isinstance(op.tip, TecanTip)
@@ -453,7 +454,7 @@ class EVOBackend(TecanLiquidHandler):
     tecan_liquid_classes = [
       get_liquid_class(
         target_volume=op.volume,
-        liquid_class=op.liquids[-1][0] or Liquid.WATER,
+        liquid_class=Liquid.WATER,
         tip_type=op.tip.tip_type,
       )
       if isinstance(op.tip, TecanTip)
@@ -486,9 +487,9 @@ class EVOBackend(TecanLiquidHandler):
       use_channels: The channels to use for the pickup operations.
     """
 
-    assert (
-      min(use_channels) >= self.num_channels - self.diti_count
-    ), f"DiTis can only be configured for the last {self.diti_count} channels"
+    assert min(use_channels) >= self.num_channels - self.diti_count, (
+      f"DiTis can only be configured for the last {self.diti_count} channels"
+    )
 
     # Get positions including offsets
     x_positions, y_positions, z_positions = self._liha_positions(ops, use_channels)
@@ -530,12 +531,12 @@ class EVOBackend(TecanLiquidHandler):
       use_channels: The channels to use for the drop operations.
     """
 
-    assert (
-      min(use_channels) >= self.num_channels - self.diti_count
-    ), f"DiTis can only be configured for the last {self.diti_count} channels"
-    assert all(
-      isinstance(op.resource, (Trash, TipSpot)) for op in ops
-    ), "Must drop in waste container or tip rack"
+    assert min(use_channels) >= self.num_channels - self.diti_count, (
+      f"DiTis can only be configured for the last {self.diti_count} channels"
+    )
+    assert all(isinstance(op.resource, (Trash, TipSpot)) for op in ops), (
+      "Must drop in waste container or tip rack"
+    )
 
     # Get positions including offsets
     x_positions, y_positions, _ = self._liha_positions(ops, use_channels)
@@ -576,7 +577,7 @@ class EVOBackend(TecanLiquidHandler):
 
     z_range = await self.roma.report_z_param(5)
     x, y, z = self._roma_positions(
-      pickup.resource, pickup.resource.get_absolute_location(), z_range
+      pickup.resource, pickup.resource.get_location_wrt(self.deck), z_range
     )
     h = int(pickup.resource.get_absolute_size_y() * 10)
 
@@ -609,7 +610,9 @@ class EVOBackend(TecanLiquidHandler):
     """Drop a resource like a plate or a lid using the integrated robotic arm."""
 
     z_range = await self.roma.report_z_param(5)
-    x, y, z = self._roma_positions(drop.resource, drop.resource.get_absolute_location(), z_range)
+    x, y, z = self._roma_positions(
+      drop.resource, drop.resource.get_location_wrt(self.deck), z_range
+    )
     xt, yt, zt = self._roma_positions(drop.resource, drop.destination, z_range)
 
     # move to target
@@ -682,7 +685,7 @@ class EVOBackend(TecanLiquidHandler):
       return int(self._z_range - z + z_off * 10 + tip_length)  # TODO: verify z formula
 
     for i, (op, channel) in enumerate(zip(ops, use_channels)):
-      location = ops[i].resource.get_absolute_location() + op.resource.center()
+      location = ops[i].resource.get_location_wrt(self.deck) + op.resource.center()
       x_positions[channel] = int((location.x - 100 + op.offset.x) * 10)
       y_positions[channel] = int((346.5 - location.y + op.offset.y) * 10)  # TODO: verify
 
@@ -695,13 +698,13 @@ class EVOBackend(TecanLiquidHandler):
       if isinstance(op, (SingleChannelAspiration, SingleChannelDispense)):
         z_positions["travel"][channel] = round(self._z_traversal_height * 10)
       z_positions["start"][channel] = get_z_position(
-        par.z_start, par.get_absolute_location().z + op.offset.z, tip_length
+        par.z_start, par.get_location_wrt(self.deck).z + op.offset.z, tip_length
       )
       z_positions["dispense"][channel] = get_z_position(
-        par.z_dispense, par.get_absolute_location().z + op.offset.z, tip_length
+        par.z_dispense, par.get_location_wrt(self.deck).z + op.offset.z, tip_length
       )
       z_positions["max"][channel] = get_z_position(
-        par.z_max, par.get_absolute_location().z + op.offset.z, tip_length
+        par.z_max, par.get_location_wrt(self.deck).z + op.offset.z, tip_length
       )
 
     return x_positions, y_positions, z_positions

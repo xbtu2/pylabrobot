@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABCMeta, abstractmethod
 from typing import Dict, List, Optional, Union
 
+from pylabrobot.liquid_handling.channel_positioning import GENERIC_LH_MIN_SPACING_BETWEEN_CHANNELS
 from pylabrobot.liquid_handling.standard import (
   Drop,
   DropTipRack,
@@ -19,7 +20,7 @@ from pylabrobot.liquid_handling.standard import (
   SingleChannelDispense,
 )
 from pylabrobot.machines.backend import MachineBackend
-from pylabrobot.resources import Deck, Resource, Tip
+from pylabrobot.resources import Deck, Tip
 from pylabrobot.resources.tip_tracker import TipTracker
 
 
@@ -34,12 +35,23 @@ class LiquidHandlerBackend(MachineBackend, metaclass=ABCMeta):
     setup_finished: Whether the backend has been set up.
   """
 
+  _num_arms: int = 0
+
+  @property
+  def num_arms(self) -> int:
+    return self._num_arms
+
   def __init__(self):
     super().__init__()
     self.setup_finished = False
+    self._head96_installed: Optional[bool] = False
     self._deck: Optional[Deck] = None
     self._head: Optional[Dict[int, TipTracker]] = None
     self._head96: Optional[Dict[int, TipTracker]] = None
+
+  @property
+  def head96_installed(self) -> Optional[bool]:
+    return self._head96_installed
 
   def set_deck(self, deck: Deck):
     """Set the deck for the robot. Called automatically by `LiquidHandler.setup` or can be called
@@ -69,24 +81,6 @@ class LiquidHandlerBackend(MachineBackend, metaclass=ABCMeta):
   async def setup(self):
     """Set up the robot. This method should be called before any other method is called."""
     assert self._deck is not None, "Deck not set"
-
-  async def assigned_resource_callback(self, resource: Resource):
-    """Called when a new resource was assigned to the robot.
-
-    This callback will also be called immediately after the setup method has been called for any
-    resources that were assigned to the robot before it was set up. The first resource will always
-    be the deck itself.
-
-    Args:
-      resource: The resource that was assigned to the robot.
-    """
-
-  async def unassigned_resource_callback(self, name: str):
-    """Called when a resource is unassigned from the robot.
-
-    Args:
-      resource: The name of the resource that was unassigned from the robot.
-    """
 
   @property
   @abstractmethod
@@ -158,6 +152,33 @@ class LiquidHandlerBackend(MachineBackend, metaclass=ABCMeta):
     """Move the specified channel to the specified z coordinate."""
 
     raise NotImplementedError()
+
+  async def request_tip_presence(self) -> List[Optional[bool]]:
+    """Request the tip presence status for each channel. Returns a list of length `num_channels`
+    where each element is `True` if a tip is mounted, `False` if not, or `None` if unknown."""
+
+    raise NotImplementedError()
+
+  def get_channel_spacings(self, use_channels: List[int]) -> List[float]:
+    """Get the per-channel occupancy diameter for each channel being used.
+
+    Each value is the channel's occupancy diameter - the physical space it takes up.
+    The required center-to-center distance between two adjacent channels is the sum of
+    their radii: ``spacing[i]/2 + spacing[j]/2``.
+
+    Args:
+      use_channels: The channels being used, in order.
+
+    Returns:
+      List of per-channel occupancy diameters (mm), length = ``len(use_channels)``.
+      Defaults to ``GENERIC_LH_MIN_SPACING_BETWEEN_CHANNELS`` (9mm) for all channels.
+      Backends with variable channel spacing should override this.
+
+    Note: This assumes channels spread along Y. Backends where channels are fixed in Y
+    (e.g. OT2 with 2 channels at fixed X spacing) should either override this or
+    signal that Y-spread is not supported via a ``supports_y_spread`` property.
+    """
+    return [GENERIC_LH_MIN_SPACING_BETWEEN_CHANNELS] * len(use_channels)
 
   @abstractmethod
   def can_pick_up_tip(self, channel_idx: int, tip: Tip) -> bool:

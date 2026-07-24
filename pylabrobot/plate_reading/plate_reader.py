@@ -1,11 +1,10 @@
 import logging
-from typing import List, Optional, cast
+from typing import Dict, List, Optional, cast
 
 from pylabrobot.machines.machine import Machine, need_setup_finished
 from pylabrobot.plate_reading.backend import PlateReaderBackend
 from pylabrobot.plate_reading.standard import NoPlateError
-from pylabrobot.resources import Coordinate, Plate, Resource
-from pylabrobot.resources.resource_holder import ResourceHolder
+from pylabrobot.resources import Coordinate, Plate, Resource, ResourceHolder, Rotation, Well
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +32,11 @@ class PlateReader(ResourceHolder, Machine):
     size_y: float,
     size_z: float,
     backend: PlateReaderBackend,
-    category: Optional[str] = None,
+    rotation: Optional["Rotation"] = None,
+    category: Optional[str] = "plate_reader",
     model: Optional[str] = None,
+    child_location: Coordinate = Coordinate.zero(),
+    preferred_pickup_location: Optional[Coordinate] = None,
   ) -> None:
     ResourceHolder.__init__(
       self,
@@ -42,8 +44,11 @@ class PlateReader(ResourceHolder, Machine):
       size_x=size_x,
       size_y=size_y,
       size_z=size_z,
+      rotation=rotation,
       category=category,
       model=model,
+      child_location=child_location,
+      preferred_pickup_location=preferred_pickup_location,
     )
     Machine.__init__(self, backend=backend)
     self.backend: PlateReaderBackend = backend  # fix type
@@ -54,44 +59,98 @@ class PlateReader(ResourceHolder, Machine):
     location: Optional[Coordinate] = None,
     reassign: bool = True,
   ):
-    if len(self.children) >= 1:
+    if len([c for c in self.children if isinstance(c, Plate)]) >= 1:
       raise ValueError("There already is a plate in the plate reader.")
-    if not isinstance(resource, Plate):
-      raise ValueError("The resource must be a Plate.")
 
     super().assign_child_resource(resource, location=location, reassign=reassign)
 
   def get_plate(self) -> Plate:
-    if len(self.children) == 0:
+    plate_children = [c for c in self.children if isinstance(c, Plate)]
+    if len(plate_children) == 0:
       raise NoPlateError("There is no plate in the plate reader.")
-    return cast(Plate, self.children[0])
+    return cast(Plate, plate_children[0])
 
+  @need_setup_finished
   async def open(self, **backend_kwargs) -> None:
     await self.backend.open(**backend_kwargs)
 
+  @need_setup_finished
   async def close(self, **backend_kwargs) -> None:
     plate = self.get_plate() if len(self.children) > 0 else None
     await self.backend.close(plate=plate, **backend_kwargs)
 
   @need_setup_finished
-  async def read_luminescence(self, focal_height: float) -> List[List[float]]:
-    """Read the luminescence from the plate.
+  async def read_luminescence(
+    self,
+    focal_height: float,
+    wells: Optional[List[Well]] = None,
+    use_new_return_type: bool = False,
+    **backend_kwargs,
+  ) -> List[Dict]:
+    """Read the luminescence from the plate reader.
 
     Args:
-      focal_height: The focal height to read the luminescence at, in micrometers.
+      focal_height: The focal height to read the luminescence at, in millimeters.
+      use_new_return_type: Whether to return the new return type, which is a list of dictionaries.
+
+    Returns:
+      A list of dictionaries, one for each measurement. Each dictionary contains:
+        "time": float,
+        "temperature": float,
+        "data": List[List[float]]
     """
 
-    return await self.backend.read_luminescence(plate=self.get_plate(), focal_height=focal_height)
+    result = await self.backend.read_luminescence(
+      plate=self.get_plate(),
+      wells=wells or self.get_plate().get_all_items(),
+      focal_height=focal_height,
+      **backend_kwargs,
+    )
+
+    if not use_new_return_type:
+      logger.warning(
+        "The return type of read_luminescence will change in a future version. Please set "
+        "use_new_return_type=True to use the new return type."
+      )
+      return result[0]["data"]  # type: ignore[no-any-return]
+    return result
 
   @need_setup_finished
-  async def read_absorbance(self, wavelength: int) -> List[List[float]]:
-    """Read the absorbance from the plate in OD, unless otherwise specified by the backend.
+  async def read_absorbance(
+    self,
+    wavelength: int,
+    wells: Optional[List[Well]] = None,
+    use_new_return_type: bool = False,
+    **backend_kwargs,
+  ) -> List[Dict]:
+    """Read the absorbance from the plate reader.
 
     Args:
       wavelength: The wavelength to read the absorbance at, in nanometers.
+      use_new_return_type: Whether to return the new return type, which is a list of dictionaries.
+
+    Returns:
+      A list of dictionaries, one for each measurement. Each dictionary contains:
+        "wavelength": int,
+        "time": float,
+        "temperature": float,
+        "data": List[List[float]]
     """
 
-    return await self.backend.read_absorbance(plate=self.get_plate(), wavelength=wavelength)
+    result = await self.backend.read_absorbance(
+      plate=self.get_plate(),
+      wells=wells or self.get_plate().get_all_items(),
+      wavelength=wavelength,
+      **backend_kwargs,
+    )
+
+    if not use_new_return_type:
+      logger.warning(
+        "The return type of read_absorbance will change in a future version. Please set "
+        "use_new_return_type=True to use the new return type."
+      )
+      return result[0]["data"]  # type: ignore[no-any-return]
+    return result
 
   @need_setup_finished
   async def read_fluorescence(
@@ -99,13 +158,25 @@ class PlateReader(ResourceHolder, Machine):
     excitation_wavelength: int,
     emission_wavelength: int,
     focal_height: float,
-  ) -> List[List[float]]:
-    """
+    wells: Optional[List[Well]] = None,
+    use_new_return_type: bool = False,
+    **backend_kwargs,
+  ) -> List[Dict]:
+    """Read the fluorescence from the plate reader.
 
     Args:
       excitation_wavelength: The excitation wavelength to read the fluorescence at, in nanometers.
       emission_wavelength: The emission wavelength to read the fluorescence at, in nanometers.
-      focal_height: The focal height to read the fluorescence at, in micrometers.
+      focal_height: The focal height to read the fluorescence at, in millimeters.
+      use_new_return_type: Whether to return the new return type, which is a list of dictionaries.
+
+    Returns:
+      A list of dictionaries, one for each measurement. Each dictionary contains:
+        "ex_wavelength": int,
+        "em_wavelength": int,
+        "time": float,
+        "temperature": float,
+        "data": List[List[float]]
     """
 
     if excitation_wavelength > emission_wavelength:
@@ -113,9 +184,21 @@ class PlateReader(ResourceHolder, Machine):
         "Excitation wavelength is greater than emission wavelength. This is unusual and may indicate an error."
       )
 
-    return await self.backend.read_fluorescence(
+    result = await self.backend.read_fluorescence(
       plate=self.get_plate(),
+      wells=wells or self.get_plate().get_all_items(),
       excitation_wavelength=excitation_wavelength,
       emission_wavelength=emission_wavelength,
       focal_height=focal_height,
+      **backend_kwargs,
     )
+    if not use_new_return_type:
+      logger.warning(
+        "The return type of read_fluorescence will change in a future version. Please set "
+        "use_new_return_type=True to use the new return type."
+      )
+      return result[0]["data"]  # type: ignore[no-any-return]
+    return result
+
+  def serialize(self) -> dict:
+    return {**Resource.serialize(self), **Machine.serialize(self)}

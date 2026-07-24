@@ -13,6 +13,7 @@ from pylabrobot.resources.well import (
   Well,
   WellBottomType,
 )
+from pylabrobot.utils.interpolation import interpolate_1d
 
 # Please conform with the 'manufacturer-first, then brands' naming principle:
 
@@ -121,40 +122,39 @@ def Thermo_TS_96_wellplate_1200ul_Rb(name: str, with_lid: bool = False) -> Plate
 # # # # # # # # # # Thermo_AB_96_wellplate_300ul_Vb_EnduraPlate # # # # # # # # # #
 
 
+# Calibration data: measured height (mm) → known volume (uL)
+_enduraplate_height_to_volume = {
+  0.0: 0.0,
+  0.17: 4.0,
+  0.77: 8.0,
+  2.27: 20.0,
+  6.57: 70.0,
+  9.17: 120.0,
+  11.17: 170.0,
+  13.17: 220.0,
+  15.17: 260.0,
+}
+_enduraplate_volume_to_height = {v: k for k, v in _enduraplate_height_to_volume.items()}
+
+
 def _compute_volume_from_height_Thermo_AB_96_wellplate_300ul_Vb_EnduraPlate(
   h: float,
-):
-  if h > 21.1:
-    raise ValueError(f"Height {h} is too large for" + "ThermoScientific_96_wellplate_1200ul_Rd")
-  return max(
-    0.9617 + 10.2590 * h - 1.3069 * h**2 + 0.26799 * h**3 - 0.01003 * h**4,
-    0,
-  )
+) -> float:
+  if h > 20.1 * 1.05:
+    raise ValueError(f"Height {h} is too large for Thermo_AB_96_wellplate_300ul_Vb_EnduraPlate")
+  return round(interpolate_1d(h, _enduraplate_height_to_volume, bounds_handling="extrapolate"), 3)
 
 
 def _compute_height_from_volume_Thermo_AB_96_wellplate_300ul_Vb_EnduraPlate(
   liquid_volume: float,
-):
+) -> float:
   if liquid_volume > 315:  # 5% tolerance
     raise ValueError(
-      f"Volume {liquid_volume} is too large for" + "ThermoScientific_96_wellplate_1200ul_Rd"
+      f"Volume {liquid_volume} is too large for Thermo_AB_96_wellplate_300ul_Vb_EnduraPlate"
     )
-  return max(
-    -0.1823
-    + 0.1327 * liquid_volume
-    - 0.000637 * liquid_volume**2
-    + 1.6577e-6 * liquid_volume**3
-    - 1.1487e-9 * liquid_volume**4,
-    0,
+  return round(
+    interpolate_1d(liquid_volume, _enduraplate_volume_to_height, bounds_handling="extrapolate"), 3
   )
-
-
-# results_measurement_fitting_dict = {
-#     "Volume (ul)": [0, 4, 8, 20, 70, 120, 170, 220, 260],
-#     "Observed Height (mm)": [0, 0.17, 0.77, 2.27, 6.57, 9.17, 11.17, 13.17, 15.17],
-#     "Predicted Height (mm)": [0, 0.338, 0.839, 2.230, 6.526, 9.195, 11.152, 13.141, 15.145],
-#     "Relative Deviation (%)": [0, 99.07, 9.01, -1.76, -0.66, 0.27, -0.16, -0.22, -0.17]
-# }
 
 
 def Thermo_AB_96_wellplate_300ul_Vb_EnduraPlate_Lid(name: str) -> Lid:
@@ -172,9 +172,9 @@ def Thermo_AB_96_wellplate_300ul_Vb_EnduraPlate_Lid(name: str) -> Lid:
 
 def Thermo_AB_96_wellplate_300ul_Vb_EnduraPlate(name: str, with_lid: bool = False) -> Plate:
   """Thermo Fisher Scientific/Fisher Scientific cat. no.: 4483354/15273005 (= with barcode)
-  - Part no.: 16698853 (FS) (= **without** barcode).
+  - alternative cat. no.: 16698853 (FS) (= **without** barcode).
   - See `./engineering_diagrams/` directory for more part numbers (different colours).
-  - Material: Polycarbonate, Polypropylene.
+  - Material: Polycarbonate, Polypropylene
   - Sterilization compatibility: ?
   - Chemical resistance: ?
   - Thermal resistance: ?
@@ -217,6 +217,9 @@ def Thermo_AB_96_wellplate_300ul_Vb_EnduraPlate(name: str, with_lid: bool = Fals
   )
 
 
+# # # # # # # # # # Thermo_Nunc_96_well_plate_1300uL_Rb # # # # # # # # # #
+
+
 def Thermo_Nunc_96_well_plate_1300uL_Rb(name: str) -> Plate:
   """
   - Part no.: 260252
@@ -246,7 +249,256 @@ def Thermo_Nunc_96_well_plate_1300uL_Rb(name: str) -> Plate:
       bottom_type=WellBottomType.U,
       material_z_thickness=31.6 - 29.1 - 1.4,  # from definition, F - L - N
       cross_section_type=CrossSectionType.CIRCLE,
-      compute_height_from_volume=lambda liquid_volume: liquid_volume
-      / (math.pi * ((well_diameter / 2) ** 2)),
+      compute_height_from_volume=lambda liquid_volume: (
+        liquid_volume / (math.pi * ((well_diameter / 2) ** 2))
+      ),
+    ),
+  )
+
+
+# # # # # # # # # # thermo_AB_96_wellplate_300ul_Vb_MicroAmp # # # # # # # # # #
+
+
+# Calibration data: measured height (mm) → known volume (uL)
+_microamp_height_to_volume = {
+  0.0: 0.0,
+  1.69: 4.0,
+  2.29: 8.0,
+  3.89: 20.0,
+  5.79: 40.0,
+  8.49: 70.0,
+  10.59: 120.0,
+  12.69: 170.0,
+  14.79: 220.0,
+  16.59: 260.0,
+  17.89: 290.0,
+}
+_microamp_volume_to_height = {v: k for k, v in _microamp_height_to_volume.items()}
+
+
+def _compute_volume_from_height_thermo_AB_96_wellplate_300ul_Vb_MicroAmp(height_mm: float) -> float:
+  if height_mm > (23.24 - 0.74) * 1.05:
+    raise ValueError(
+      f"Height {height_mm} is too large for thermo_AB_96_wellplate_300ul_Vb_MicroAmp"
+    )
+  return round(
+    interpolate_1d(height_mm, _microamp_height_to_volume, bounds_handling="extrapolate"), 3
+  )
+
+
+def _compute_height_from_volume_thermo_AB_96_wellplate_300ul_Vb_MicroAmp(volume_ul: float) -> float:
+  if volume_ul > 305:  # 5% tolerance above 290 µL
+    raise ValueError(
+      f"Volume {volume_ul} is too large for thermo_AB_96_wellplate_300ul_Vb_MicroAmp"
+    )
+  return round(
+    interpolate_1d(volume_ul, _microamp_volume_to_height, bounds_handling="extrapolate"), 3
+  )
+
+
+def thermo_AB_96_wellplate_300ul_Vb_MicroAmp_Lid(name: str) -> Lid:
+  raise NotImplementedError("This lid is not currently defined.")
+
+
+def thermo_AB_96_wellplate_300ul_Vb_MicroAmp(name: str, with_lid: bool = False) -> Plate:
+  """Thermo Fisher Scientific cat. no.: N8010560/4316813 (w/o barcode)
+  - alternative cat. no.: 4306737/4326659 (with barcode).
+  - See `./engineering_diagrams/` directory for more part numbers.
+  - Material: Polypropylene.
+  - Sterilization compatibility: ?
+  - Chemical resistance: ?
+  - Thermal resistance: ?
+  - Cleanliness: 'Certified DNA/RNase Free'.
+  - Warning: NOT ANSI/SLAS-format!
+  - optimal pickup_distance_from_top = 6 mm.
+  - total_volume = 300 ul.
+  - working_volume = 200 ul (recommended by manufacturer).
+
+  https://documents.thermofisher.com/TFS-Assets/LSG/manuals/cms_042421.pdf
+  """
+  return Plate(
+    name=name,
+    size_x=125.98,
+    size_y=85.85,
+    size_z=23.24,
+    lid=thermo_AB_96_wellplate_300ul_Vb_MicroAmp_Lid(name + "_lid") if with_lid else None,
+    model=thermo_AB_96_wellplate_300ul_Vb_MicroAmp.__name__,
+    plate_type="semi-skirted",
+    ordered_items=create_ordered_items_2d(
+      Well,
+      num_items_x=12,
+      num_items_y=8,
+      dx=10.6,
+      dy=8.59,
+      dz=0.0,  # check that plate is semi-skirted
+      item_dx=9,
+      item_dy=9,
+      size_x=5.494,
+      size_y=5.494,
+      size_z=23.24,
+      bottom_type=WellBottomType.V,
+      material_z_thickness=0.74,
+      cross_section_type=CrossSectionType.CIRCLE,
+      compute_volume_from_height=(
+        _compute_volume_from_height_thermo_AB_96_wellplate_300ul_Vb_MicroAmp
+      ),
+      compute_height_from_volume=(
+        _compute_height_from_volume_thermo_AB_96_wellplate_300ul_Vb_MicroAmp
+      ),
+    ),
+  )
+
+
+def thermo_AB_384_wellplate_40uL_Vb_MicroAmp(name: str) -> Plate:
+  """Thermo Fisher Scientific cat. no.: 4309849, 4326270, 4343814 (with barcode), 4343370 (w/o barcode).
+
+  https://documents.thermofisher.com/TFS-Assets/LSG/manuals/cms_042831.pdf
+  """
+  diameter = 3.17
+  return Plate(
+    name=name,
+    size_x=127.8,
+    size_y=85.5,
+    size_z=9.70,
+    lid=None,
+    model=thermo_AB_384_wellplate_40uL_Vb_MicroAmp.__name__,
+    plate_type="skirted",
+    ordered_items=create_ordered_items_2d(
+      Well,
+      num_items_x=24,
+      num_items_y=16,
+      dx=12.15 - diameter / 2,
+      dy=9 - diameter / 2,
+      dz=0.0,
+      item_dx=4.5,
+      item_dy=4.5,
+      size_x=diameter,
+      size_y=diameter,
+      size_z=9.70 - 0.61,
+      bottom_type=WellBottomType.V,
+      material_z_thickness=0.61,
+      cross_section_type=CrossSectionType.CIRCLE,
+    ),
+  )
+
+
+# # # # # # # # # # thermo_nunc_1_troughplate_90000uL_Fb_omnitray # # # # # # # # # #
+
+
+def thermo_nunc_1_troughplate_90000uL_Fb_omnitray(name: str) -> Plate:
+  """
+  https://assets.fishersci.com/TFS-Assets/LSG/manuals/D03023.pdf
+
+  - Brand: Thermo Scientific / Nunc
+  - Part no.: 165218, 140156, 242811, 264728
+  """
+
+  return Plate(
+    name=name,
+    size_x=127.76,  # from spec
+    size_y=85.47,  # from spec
+    size_z=14.5,  # from spec
+    lid=None,  # TODO: define a matching Lid if you use one with this tray
+    model=thermo_nunc_1_troughplate_90000uL_Fb_omnitray.__name__,
+    ordered_items=create_ordered_items_2d(
+      Well,
+      num_items_x=1,
+      num_items_y=1,
+      dx=(127.76 - 123.7) / 2,  # from spec
+      dy=(85.47 - 81.3) / 2,  # from spec
+      dz=14.5 - 11.7 - 2.5,  # from spec: plate_z - well_z - material_z_thickness
+      item_dx=9.0,
+      item_dy=9.0,
+      size_x=123.7,  # from spec
+      size_y=81.3,  # from spec
+      size_z=11.7,  # from spec
+      bottom_type=WellBottomType.FLAT,
+      material_z_thickness=2.5,  # from spec
+      cross_section_type=CrossSectionType.RECTANGLE,
+      # compute_volume_from_height=None,
+      # compute_height_from_volume=None,
+    ),
+  )
+
+
+# # # # # # # # # # Thermo_TS_Nunc_96_wellplate_300uL_Fb # # # # # # # # # #
+
+
+def Thermo_TS_Nunc_96_wellplate_300uL_Fb(name: str, with_lid: bool = False) -> Plate:
+  """Thermo Scientific™ Nunc™ 96-Well Optical-Bottom Microplate, black, TC surface
+  - Product Number: 165305
+  - Max Volume: 400 uL
+  - working volume: 50-300uL (in practice, although spec sheet says 50-200uL))
+  - Manufacturer link: https://www.fishersci.com/shop/products/nunc-microwell-96-well-cell-culture-treated-flat-bottom-microplate/1256670#
+  - Spec sheet info: https://documents.thermofisher.com/TFS-Assets/LCD/Schematics-%26-Diagrams/1653xx_0713.pdf
+  """
+  return Plate(
+    name=name,
+    size_x=127.76,  # from spec
+    size_y=85.47,  # from spec
+    size_z=14.86,  # from spec
+    model="Thermo_TS_Nunc_96_wellplate_300uL_Fb",
+    lid=Thermo_TS_Nunc_96_wellplate_300uL_Fb_Lid(name + "_lid") if with_lid else None,
+    ordered_items=create_ordered_items_2d(
+      Well,
+      num_items_x=12,  # from spec
+      num_items_y=8,  # from spec
+      dx=11.095,  # from spec
+      dy=8.025,  # from spec
+      dz=1.98,  # from spec
+      item_dx=9,  # from spec
+      item_dy=9,  # from spec
+      size_x=6.45,  # from spec
+      size_y=6.45,  # from spec
+      size_z=12.1,  # from spec
+      bottom_type=WellBottomType.FLAT,  # flat bottom wells
+      material_z_thickness=2.2,  # from spec
+    ),
+  )
+
+
+def Thermo_TS_Nunc_96_wellplate_300uL_Fb_Lid(name: str) -> Lid:
+  return Lid(
+    name=name,
+    size_x=127.25,  # from spec
+    size_y=85.3,  # from spec
+    size_z=9.1,  # from spec
+    nesting_z_height=16.7 - 14.86,  # from spec: lid+plate_z - plate_z
+    model="Thermo_TS_Nunc_96_assay_300uL_Fb_Lid",
+  )
+
+
+# # # # # # # # # # thermo_TS_nalgene_1_troughplate_300mL_Fb # # # # # # # # # #
+
+
+def thermo_TS_nalgene_1_troughplate_300mL_Fb(name: str) -> Plate:
+  """Thermo Fisher Scientific Nalgene 300mL Flat Bottom Reservoir
+  - Product Number: 12001300 (non-sterile), 12001301 (sterile)
+  - 1-well reservoir with SBS footprint
+  - Max Volume: 300 mL
+  - manufacturer_link: https://www.fishersci.com/shop/products/nalgene-disposable-polypropylene-robotic-reservoirs/12565572
+  - Spec sheet info: https://assets.fishersci.com/TFS-Assets/LCD/Schematics-&-Diagrams/120013XX_0405.PDF
+  """
+  return Plate(
+    name=name,
+    size_x=127.8,  # from spec
+    size_y=85.5,  # from spec
+    size_z=39.9,  # from spec
+    model=thermo_TS_nalgene_1_troughplate_300mL_Fb.__name__,
+    ordered_items=create_ordered_items_2d(
+      Well,
+      num_items_x=1,  # from spec
+      num_items_y=1,  # from spec
+      dx=(127.8 - 123.8) / 2,  # from spec
+      dy=(85.5 - 82.1) / 2,  # from spec
+      dz=3.3,  # from spec
+      item_dx=0,  # from spec
+      item_dy=0,  # from spec
+      size_x=123.8,  # from spec
+      size_y=82.1,  # from spec
+      size_z=39.9 - 3.3 - 1.15,  # from spec/calculated
+      bottom_type=WellBottomType.FLAT,  # from spec
+      cross_section_type=CrossSectionType.RECTANGLE,  # rectangle wells
+      material_z_thickness=1.15,  # measured.
     ),
   )

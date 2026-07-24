@@ -40,6 +40,42 @@ PyHamilton is a Windows only interface to Hamilton's VENUS.
 :target: https://www.tekmatic.com
 ```
 
+```{image} /img/supported_by/logo_westportal.jpg
+:alt: West Portal Scientific
+:class: company
+:target: https://www.westportalsci.com
+```
+
+```{image} /img/supported_by/logo_byonoy.svg
+:alt: Byonoy
+:class: company
+:target: https://byonoy.com
+```
+
+```{image} /img/supported_by/logo_nugget.png
+:alt: Nugget
+:class: company
+:target: https://www.nuggetscientific.com
+```
+
+```{image} /img/supported_by/logo_alpaqua.png
+:alt: Alpaqua
+:class: company
+:target: https://www.alpaqua.com/
+```
+
+```{image} /img/supported_by/logo_brooks.png
+:alt: Brooks
+:class: company
+:target: https://www.preciseflexrobots.com/
+```
+
+```{image} /img/supported_by/logo_q.png
+:alt: QINSTRUMENTS
+:class: company
+:target: https://www.qinstruments.com
+```
+
 ## Used by
 
 ```{image} /img/used_by/logo_mit.jpg
@@ -101,6 +137,12 @@ PyHamilton is a Windows only interface to Hamilton's VENUS.
 :target: https://www.sanofi.com
 ```
 
+```{image} /img/used_by/logo_bio_techne.jpg
+:alt: Bio-Techne
+:class: company
+:target: https://www.bio-techne.com/
+```
+
 ```{raw} html
 <style>
 .company {
@@ -137,6 +179,14 @@ user_guide/index
 ```
 
 ```{toctree}
+:maxdepth: 0
+:caption: Cookbook
+:hidden:
+
+ Cookbook <cookbook/index>
+```
+
+```{toctree}
 :maxdepth: 2
 :caption: Development
 :hidden:
@@ -155,8 +205,10 @@ api/pylabrobot
 ```{toctree}
 :hidden:
 
+community-protocols/index
 Community <https://discuss.pylabrobot.org/>
 ```
+
 
 ## Citing
 

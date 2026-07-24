@@ -3,6 +3,7 @@ import datetime
 import logging
 import threading
 import time
+import warnings
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from typing import (
@@ -70,6 +71,7 @@ class HamiltonLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
 
     super().__init__()
     self.io = USB(
+      human_readable_device_name="Hamilton Liquid Handler",
       id_vendor=0x08AF,
       id_product=id_product,
       device_address=device_address,
@@ -82,29 +84,46 @@ class HamiltonLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
     self.id_ = 0
 
     self._reading_thread: Optional[threading.Thread] = None
+    self._reading_thread_stop = threading.Event()
     self._waiting_tasks: List[HamiltonTask] = []
     self._tth2tti: dict[int, int] = {}  # hash to tip type index
 
-    # Whether to allow the firmware to plan liquid handling operations when the y positions are
-    # equal (same container). This allows you to pass the same container to aspirate and dispense
-    # multiple times in a single call, and the onboard firmware will compute the optimal order of
-    # operations. This is useful for efficiency but may hurt protocol interoperability.
-    self.allow_firmware_planning = False
+  def __setattr__(self, name: str, value: Any) -> None:
+    if name == "allow_firmware_planning":
+      warnings.warn(
+        "allow_firmware_planning is deprecated and will be removed in a future version. "
+        "The behavior is now always enabled.",
+        DeprecationWarning,
+        stacklevel=2,
+      )
+      return
+    super().__setattr__(name, value)
 
   async def setup(self):
     await super().setup()
     await self.io.setup()
+    self._reading_thread_stop.clear()
+    self._reading_thread = threading.Thread(target=self._reading_thread_main, daemon=True)
+    self._reading_thread.start()
 
   async def stop(self):
+    self._reading_thread_stop.set()
+    if self._reading_thread is not None:
+      self._reading_thread.join(timeout=10)
+      self._reading_thread = None
     for task in self._waiting_tasks:
-      task.fut.set_exception(RuntimeError("Stopping HamiltonLiquidHandler."))
+      task.loop.call_soon_threadsafe(
+        task.fut.set_exception, RuntimeError("Stopping HamiltonLiquidHandler.")
+      )
     self._waiting_tasks.clear()
     self._tth2tti.clear()
+    await self.io.stop()
 
   def serialize(self) -> dict:
     usb_serialized = self.io.serialize()
     del usb_serialized["id_vendor"]
     del usb_serialized["id_product"]
+    del usb_serialized["human_readable_device_name"]
     liquid_handler_serialized = LiquidHandlerBackend.serialize(self)
     return {**usb_serialized, **liquid_handler_serialized}
 
@@ -287,16 +306,16 @@ class HamiltonLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
     cmd: str,
     timeout: int,
   ) -> None:
-    """Submit a task to the reading thread. Starts reading thread if it is not already running."""
+    """Submit a task to the reading thread."""
 
     timeout_time = time.time() + timeout
     self._waiting_tasks.append(
       HamiltonTask(id_=id_, loop=loop, fut=fut, cmd=cmd, timeout_time=timeout_time)
     )
 
-    # Start reading thread if it is not already running.
-    if len(self._waiting_tasks) == 1:  # self._reading_thread is None
-      self._reading_thread = threading.Thread(target=self._reading_thread_main)
+    if self._reading_thread is None or not self._reading_thread.is_alive():
+      self._reading_thread_stop.clear()
+      self._reading_thread = threading.Thread(target=self._reading_thread_main, daemon=True)
       self._reading_thread.start()
 
   @abstractmethod
@@ -317,7 +336,7 @@ class HamiltonLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
     loop.run_until_complete(self._continuously_read())
 
   async def _continuously_read(self) -> None:
-    """Continuously read from the USB port until all tasks are completed.
+    """Continuously read from the USB port until stop is requested.
 
     Tasks are stored in the `self._waiting_tasks` list, and contain a future that will be
     completed when the task is finished. Tasks are submitted to the list using the
@@ -328,7 +347,7 @@ class HamiltonLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
     list. If a task has timed out, complete the future with a `TimeoutError`.
     """
 
-    while len(self._waiting_tasks) > 0:
+    while not self._reading_thread_stop.is_set():
       for idx in range(len(self._waiting_tasks) - 1, -1, -1):  # reverse order to allow deletion
         task = self._waiting_tasks[idx]
         if time.time() > task.timeout_time:
@@ -338,6 +357,10 @@ class HamiltonLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
             TimeoutError(f"Timeout while waiting for response to command {task.cmd}."),
           )
           del self._waiting_tasks[idx]
+
+      if len(self._waiting_tasks) == 0:
+        await asyncio.sleep(0.01)
+        continue
 
       try:
         resp = (await self.io.read()).decode("utf-8")
@@ -370,8 +393,6 @@ class HamiltonLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
           del self._waiting_tasks[idx]
           break
 
-    self._reading_thread = None
-
   def _ops_to_fw_positions(
     self, ops: Sequence[PipettingOp], use_channels: List[int]
   ) -> Tuple[List[int], List[int], List[bool]]:
@@ -389,10 +410,10 @@ class HamiltonLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
         y_positions.append(0)
       channels_involved.append(True)
 
-      x_pos = ops[i].resource.get_absolute_location(x="c", y="c", z="b").x + ops[i].offset.x
+      x_pos = ops[i].resource.get_location_wrt(self.deck, x="c", y="c", z="b").x + ops[i].offset.x
       x_positions.append(round(x_pos * 10))
 
-      y_pos = ops[i].resource.get_absolute_location(x="c", y="c", z="b").y + ops[i].offset.y
+      y_pos = ops[i].resource.get_location_wrt(self.deck, x="c", y="c", z="b").y + ops[i].offset.y
       y_positions.append(round(y_pos * 10))
 
     # check that the minimum d between any two y positions is >9mm
@@ -405,7 +426,7 @@ class HamiltonLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
           continue
         if x1 != x2:  # channels not on the same column -> will be two operations on the machine
           continue
-        if not (self.allow_firmware_planning and y1 == y2) and abs(y1 - y2) < 90:
+        if y1 != y2 and abs(y1 - y2) < 90:
           raise ValueError(
             f"Minimum distance between two y positions is <9mm: {y1}, {y2}"
             f" (channel {channel_idx1} and {channel_idx2})"
@@ -452,7 +473,10 @@ class HamiltonLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
         tip_type_table_index=ttti,
         has_filter=tip.has_filter,
         tip_length=round((tip.total_tip_length - tip.fitting_depth) * 10),  # in 0.1mm
-        maximum_tip_volume=round(tip.maximal_volume * 10),  # in 0.1ul
+        # in 0.1 uL; floor to 10 (1.0 uL) so zero-capacity teaching/probe needles register
+        # the same way the firmware's non-pipetting CoRe grip tools do (they use 1.0 uL to
+        # satisfy the tv >= 1 requirement). tv does not affect pickup (that is tl/tg).
+        maximum_tip_volume=max(round(tip.maximal_volume * 10), 10),
         tip_size=tip.tip_size,
         pickup_method=tip.pickup_method,
       )
@@ -472,15 +496,6 @@ class HamiltonLiquidHandler(LiquidHandlerBackend, metaclass=ABCMeta):
     if not isinstance(tip, HamiltonTip):
       raise ValueError(f"Tip {tip} is not a HamiltonTip.")
     return tip
-
-  async def get_ttti(self, tips: List[HamiltonTip]) -> List[int]:
-    """Get tip type table index for a list of tips.
-
-    Ensure that for all non-None tips, they have the same tip type, and return the tip type table
-    index for that tip type.
-    """
-
-    return [await self.get_or_assign_tip_type_index(tip) for tip in tips]
 
   async def send_raw_command(
     self,

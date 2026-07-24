@@ -1,8 +1,12 @@
 import asyncio
+import functools
 import http.server
+import inspect
 import json
 import logging
+import math
 import os
+import re
 import threading
 import time
 import webbrowser
@@ -10,9 +14,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 try:
   import websockets
+  import websockets.asyncio.server
   import websockets.exceptions
-  import websockets.legacy
-  import websockets.legacy.server
 
   HAS_WEBSOCKETS = True
 except ImportError as e:
@@ -23,6 +26,74 @@ from pylabrobot.__version__ import STANDARD_FORM_JSON_VERSION
 from pylabrobot.resources import Resource
 
 logger = logging.getLogger("pylabrobot")
+
+
+@functools.lru_cache(maxsize=None)
+def _get_public_methods(cls: type) -> list:
+  """Get public method signatures from a resource class for the visualizer UI."""
+  methods = []
+  for name in dir(cls):
+    if name.startswith("_"):
+      continue
+    try:
+      attr = getattr(cls, name, None)
+    except Exception:
+      continue
+    if attr is None or not callable(attr) or isinstance(attr, property):
+      continue
+    try:
+      sig = inspect.signature(attr)
+      params = [p for p in sig.parameters if p != "self"]
+      methods.append(f"{name}({', '.join(params)})")
+    except (ValueError, TypeError):
+      methods.append(f"{name}()")
+  return sorted(methods)
+
+
+def _serialize_resource_tree(resource: Resource) -> dict:
+  """Serialize a resource and its children for the visualizer.
+
+  Method signatures are not embedded per node; identical for every instance of a class,
+  they are sent once per class via :func:`_build_method_registry` and attached by type in
+  the browser. On a full deck this avoids repeating the same signature list on every well.
+  """
+  data = resource.serialize()
+  data["children"] = [_serialize_resource_tree(child) for child in resource.children]
+  return data
+
+
+def _build_method_registry(resource: Resource, registry: Optional[dict] = None) -> dict:
+  """Map each resource class name in the tree to its public method signatures.
+
+  The serialized ``type`` of a resource is its class name, so the browser can look up a
+  node's methods by ``type`` instead of receiving the same list on every node.
+  """
+  if registry is None:
+    registry = {}
+  type_name = type(resource).__name__
+  if type_name not in registry:
+    registry[type_name] = _get_public_methods(type(resource))  # type: ignore[arg-type]
+  for child in resource.children:
+    _build_method_registry(child, registry)
+  return registry
+
+
+def _sanitize_floats(obj):
+  """Recursively replace non-finite floats (inf, -inf, nan) with string representations.
+
+  Python's ``json.dumps`` outputs bare ``Infinity``/``-Infinity``/``NaN`` tokens which are not
+  valid JSON and cause ``JSON.parse()`` in the browser to throw. Walking the structure before
+  serialization is more robust than post-hoc string replacement.
+  """
+  if isinstance(obj, float) and not math.isfinite(obj):
+    if math.isnan(obj):
+      return "NaN"
+    return "Infinity" if obj > 0 else "-Infinity"
+  if isinstance(obj, dict):
+    return {k: _sanitize_floats(v) for k, v in obj.items()}
+  if isinstance(obj, (list, tuple)):
+    return [_sanitize_floats(v) for v in obj]
+  return obj
 
 
 class Visualizer:
@@ -42,25 +113,62 @@ class Visualizer:
   def __init__(
     self,
     resource: Resource,
-    ws_host: str = "127.0.0.1",
+    host: str = "127.0.0.1",
     ws_port: int = 2121,
-    fs_host: str = "127.0.0.1",
     fs_port: int = 1337,
     open_browser: bool = True,
+    name: Optional[str] = None,
+    favicon: Optional[str] = None,
+    show_machine_tools_at_start: bool = True,
+    liquid_color: str = "F39C12",
   ):
     """Create a new Visualizer. Use :meth:`.setup` to start the visualization.
 
     Args:
-      ws_host: The hostname of the websocket server.
+      host: The hostname of the file and websocket server.
       ws_port: The port of the websocket server. If this port is in use, the port will be
         incremented until a free port is found.
-      fs_host: The hostname of the file server. This is where the visualization will be served.
       fs_port: The port of the file server. If this port is in use, the port will be incremented
         until a free port is found.
       open_browser: If `True`, the visualizer will open a browser window when it is started.
+      name: A custom name to display in the browser header. If ``None``, the filename of the
+        calling script or notebook is detected automatically.
+      favicon: Path to a ``.png`` file to use as the browser tab icon. If ``None``, the
+        PyLabRobot logo is used.
+      show_machine_tools_at_start: If ``True``, machine tool popups (pipettes, arm) are opened
+        automatically when the visualizer starts.
+      liquid_color: Hex color code (without ``#``) used to fill wells, troughs, and tubes to
+        indicate liquid volume. Default is ``"F39C12"`` (amber).
     """
 
+    if not HAS_WEBSOCKETS:
+      raise RuntimeError(
+        "The visualizer requires websockets to be installed. "
+        f"Import error: {_WEBSOCKETS_IMPORT_ERROR}"
+      )
+
     self.setup_finished = False
+    self._show_machine_tools_at_start = show_machine_tools_at_start
+    color = liquid_color.strip().lstrip("#")
+    if not re.fullmatch(r"[0-9a-fA-F]{6}", color):
+      raise ValueError(
+        f"liquid_color must be a 6-character hex string (e.g. 'F39C12'), got '{liquid_color}'"
+      )
+    self._liquid_color = color.upper()
+
+    if name is not None:
+      self._source_filename = name
+    else:
+      self._source_filename = self._detect_source_filename()
+
+    if favicon is not None:
+      if not favicon.endswith(".png"):
+        raise ValueError("favicon must be a .png file")
+      if not os.path.isfile(favicon):
+        raise FileNotFoundError(f"favicon file not found: {favicon}")
+      self._favicon_path = os.path.abspath(favicon)
+    else:
+      self._favicon_path = os.path.join(os.path.dirname(__file__), "img", "logo.png")
 
     # Hook into the resource (un)assigned callbacks so we can send the appropriate events to the
     # browser.
@@ -78,8 +186,9 @@ class Visualizer:
 
     register_state_update(resource)
 
+    self.host = host
+
     # file server attributes
-    self.fs_host = fs_host
     self.fs_port = fs_port
     self.open_browser = open_browser
 
@@ -87,21 +196,28 @@ class Visualizer:
     self._fst: Optional[threading.Thread] = None
 
     # websocket server attributes
-    self.ws_host = ws_host
     self.ws_port = ws_port
     self._id = 0
 
-    self._websocket: Optional["websockets.legacy.server.WebSocketServerProtocol"] = None
+    self._websocket: Optional["websockets.asyncio.server.ServerConnection"] = None
     self._loop: Optional[asyncio.AbstractEventLoop] = None
     self._t: Optional[threading.Thread] = None
     self._stop_: Optional[asyncio.Future] = None
 
+    self._pending_state_updates: Dict[str, dict] = {}
+    self._flush_scheduled = False
+
     self.received: List[dict] = []
+    # Ids of commands whose responses a caller is actively awaiting. Only these
+    # responses are retained in ``self.received``; responses to fire-and-forget
+    # commands (every state update) are dropped so the list cannot grow without
+    # bound over a long-running session.
+    self._pending_response_ids: set = set()
 
   @property
   def websocket(
     self,
-  ) -> "websockets.legacy.server.WebSocketServerProtocol":
+  ) -> "websockets.asyncio.server.ServerConnection":
     """The websocket connection."""
     if self._websocket is None:
       raise RuntimeError("No websocket connection has been established.")
@@ -146,7 +262,7 @@ class Visualizer:
 
   async def _socket_handler(
     self,
-    websocket: "websockets.legacy.server.WebSocketServerProtocol",
+    websocket: "websockets.asyncio.server.ServerConnection",
   ):
     """Handle a new websocket connection. Save the websocket connection store received
     messages in `self.received`."""
@@ -160,7 +276,8 @@ class Visualizer:
         return
 
       data = json.loads(message)
-      self.received.append(data)
+      if data.get("id") in self._pending_response_ids:
+        self.received.append(data)
 
       # If the event is "ready", then we can save the connection and send the saved messages.
       if data.get("event") == "ready":
@@ -185,7 +302,7 @@ class Visualizer:
       "data": data,
       "event": event,
     }
-    return json.dumps(command_data), id_
+    return json.dumps(_sanitize_floats(command_data)), id_
 
   def has_connection(self) -> bool:
     """Return `True` if a websocket connection has been established."""
@@ -229,12 +346,16 @@ class Visualizer:
       await self.websocket.send(serialized_data)
 
       if wait_for_response:
-        while True:
-          if len(self.received) > 0:
-            message = self.received.pop()
-            if "id" in message and message["id"] == id_:
-              break
-          await asyncio.sleep(0.1)
+        self._pending_response_ids.add(id_)
+        try:
+          while True:
+            if len(self.received) > 0:
+              message = self.received.pop()
+              if "id" in message and message["id"] == id_:
+                break
+            await asyncio.sleep(0.1)
+        finally:
+          self._pending_response_ids.discard(id_)
 
         if not message["success"]:
           error = message.get("error", "unknown error")
@@ -258,6 +379,95 @@ class Visualizer:
       raise RuntimeError("The file server thread has not been started yet.")
     return self._fst
 
+  @staticmethod
+  def _detect_source_filename() -> str:
+    """Detect the filename of the calling script or notebook."""
+
+    # 1. VS Code sets __vsc_ipynb_file__ in the IPython user namespace.
+    try:
+      ipython = get_ipython()  # type: ignore[name-defined]  # noqa: F821
+      vsc_file = getattr(ipython, "user_ns", {}).get("__vsc_ipynb_file__")
+      if vsc_file:
+        return str(os.path.basename(vsc_file))
+    except NameError:
+      pass
+
+    # 2. Try ipynbname package (works for classic Jupyter Notebook and JupyterLab).
+    try:
+      import ipynbname  # type: ignore[import-untyped,import-not-found]
+
+      nb_path = ipynbname.path()
+      if nb_path:
+        return os.path.basename(str(nb_path))
+    except Exception:
+      pass
+
+    # 3. Query the Jupyter REST API using the kernel connection file.
+    try:
+      import json as _json
+      import urllib.request
+
+      import ipykernel  # type: ignore[import-untyped]
+
+      # Get the kernel id from the connection file path.
+      connection_file = ipykernel.get_connection_file()
+      kernel_id = os.path.basename(connection_file).replace("kernel-", "").replace(".json", "")
+
+      # Try common Jupyter server ports and tokens.
+      # First, try to get server info from jupyter_core / notebook.
+      servers = []
+      try:
+        from jupyter_server.serverapp import (  # type: ignore[import-untyped,import-not-found]
+          list_running_servers,
+        )
+
+        servers = list(list_running_servers())
+      except Exception:
+        pass
+      if not servers:
+        try:
+          from notebook.notebookapp import (  # type: ignore[import-untyped,import-not-found,no-redef]
+            list_running_servers,
+          )
+
+          servers = list(list_running_servers())
+        except Exception:
+          pass
+
+      for srv in servers:
+        base_url = srv.get("url", "").rstrip("/")
+        token = srv.get("token", "")
+        try:
+          api_url = f"{base_url}/api/sessions"
+          if token:
+            api_url += f"?token={token}"
+          req = urllib.request.Request(api_url)
+          with urllib.request.urlopen(req, timeout=2) as resp:
+            sessions = _json.loads(resp.read().decode())
+          for sess in sessions:
+            kid = sess.get("kernel", {}).get("id", "")
+            if kid == kernel_id:
+              nb_path = sess.get("notebook", {}).get("path", "") or sess.get("path", "")
+              if nb_path:
+                return str(os.path.basename(nb_path))
+        except Exception:
+          continue
+    except Exception:
+      pass
+
+    # 4. Fall back to stack inspection for .py scripts.
+    for frame_info in inspect.stack():
+      fname = frame_info.filename
+      if fname == __file__:
+        continue
+      basename = os.path.basename(fname)
+      if "ipykernel" in fname or fname.startswith("<"):
+        continue
+      if basename.endswith(".py"):
+        return basename
+
+    return ""
+
   async def setup(self):
     """Start the visualizer.
 
@@ -277,19 +487,12 @@ class Visualizer:
     Sets up the websocket server. This will run in a separate thread.
     """
 
-    if not HAS_WEBSOCKETS:
-      raise RuntimeError(
-        f"The visualizer requires websockets to be installed. Import error: {_WEBSOCKETS_IMPORT_ERROR}"
-      )
-
     async def run_server():
       self._stop_ = self.loop.create_future()
       while True:
         try:
-          async with websockets.legacy.server.serve(
-            self._socket_handler, self.ws_host, self.ws_port
-          ):
-            print(f"Websocket server started at http://{self.ws_host}:{self.ws_port}")
+          async with websockets.asyncio.server.serve(self._socket_handler, self.host, self.ws_port):
+            print(f"Websocket server started at http://{self.host}:{self.ws_port}")
             lock.release()
             await self.stop_
             break
@@ -319,16 +522,13 @@ class Visualizer:
     path = os.path.join(dirname, ".")
     if not os.path.exists(path):
       raise RuntimeError(
-        "Could not find Visualizer files. Please run from the root of the " "repository."
+        "Could not find Visualizer files. Please run from the root of the repository."
       )
 
     def start_server(lock):
-      ws_host, ws_port, fs_host, fs_port = (
-        self.ws_host,
-        self.ws_port,
-        self.fs_host,
-        self.fs_port,
-      )
+      ws_port, fs_port, source_filename = self.ws_port, self.fs_port, self._source_filename
+      favicon_path = self._favicon_path
+      liquid_color = self._liquid_color
 
       # try to start the server. If the port is in use, try with another port until it succeeds.
       class QuietSimpleHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
@@ -340,6 +540,12 @@ class Visualizer:
         def log_message(self, format, *args):
           pass
 
+        def end_headers(self):
+          self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+          self.send_header("Pragma", "no-cache")
+          self.send_header("Expires", "0")
+          super().end_headers()
+
         def do_GET(self) -> None:
           # rewrite some info in the index.html file on the fly,
           # like a simple template engine
@@ -347,26 +553,33 @@ class Visualizer:
             with open(os.path.join(path, "index.html"), "r", encoding="utf-8") as f:
               content = f.read()
 
-            content = content.replace("{{ ws_host }}", ws_host)
             content = content.replace("{{ ws_port }}", str(ws_port))
-            content = content.replace("{{ fs_host }}", fs_host)
             content = content.replace("{{ fs_port }}", str(fs_port))
+            content = content.replace("{{ source_filename }}", source_filename)
+            content = content.replace("{{ liquid_color }}", liquid_color)
 
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
             self.wfile.write(content.encode("utf-8"))
+          elif self.path == "/favicon.png":
+            with open(favicon_path, "rb") as f:
+              data = f.read()
+            self.send_response(200)
+            self.send_header("Content-type", "image/png")
+            self.end_headers()
+            self.wfile.write(data)
           else:
             return super().do_GET()
 
       while True:
         try:
           self._httpd = http.server.HTTPServer(
-            (self.fs_host, self.fs_port),
+            (self.host, self.fs_port),
             QuietSimpleHTTPRequestHandler,
           )
           print(
-            f"File server started at http://{self.fs_host}:{self.fs_port} . "
+            f"File server started at http://{self.host}:{self.fs_port} . "
             "Open this URL in your browser."
           )
           lock.release()
@@ -391,7 +604,7 @@ class Visualizer:
       time.sleep(0.001)
 
     if self.open_browser:
-      webbrowser.open(f"http://{self.fs_host}:{self.fs_port}")
+      webbrowser.open(f"http://{self.host}:{self.fs_port}")
 
   async def stop(self):
     """Stop the visualizer.
@@ -419,6 +632,7 @@ class Visualizer:
 
     # Clear all relevant attributes.
     self.received.clear()
+    self._pending_response_ids.clear()
     self._websocket = None
     self._loop = None
     self._t = None
@@ -433,7 +647,10 @@ class Visualizer:
     # send the serialized root resource (including all children) to the browser
     await self.send_command(
       "set_root_resource",
-      {"resource": self._root_resource.serialize()},
+      {
+        "resource": _serialize_resource_tree(self._root_resource),
+        "method_registry": _build_method_registry(self._root_resource),
+      },
       wait_for_response=False,
     )
 
@@ -443,15 +660,17 @@ class Visualizer:
 
     def save_resource_state(resource: Resource):
       """Recursively save the state of the resource and all child resources."""
-      if hasattr(resource, "tracker"):
-        resource_state = resource.tracker.serialize()
-        if resource_state is not None:
-          state[resource.name] = resource_state
+      resource_state = resource.serialize_state()
+      if resource_state is not None:
+        state[resource.name] = resource_state
       for child in resource.children:
         save_resource_state(child)
 
     save_resource_state(self._root_resource)
     await self.send_command("set_state", state, wait_for_response=False)
+
+    if self._show_machine_tools_at_start:
+      await self.send_command("show_machine_tools", {}, wait_for_response=False)
 
   def _handle_resource_assigned_callback(self, resource: Resource) -> None:
     """Called when a resource is assigned to a resource already in the tree starting from the
@@ -470,7 +689,8 @@ class Visualizer:
 
     # Send a `resource_assigned` event to the browser.
     data = {
-      "resource": resource.serialize(),
+      "resource": _serialize_resource_tree(resource),
+      "method_registry": _build_method_registry(resource),
       "state": resource.serialize_all_state(),
       "parent_name": (resource.parent.name if resource.parent else None),
     }
@@ -487,10 +707,24 @@ class Visualizer:
     asyncio.run_coroutine_threadsafe(fut, self.loop)
 
   def _handle_state_update_callback(self, resource: Resource) -> None:
-    """Called when the state of a resource is updated. This method will send an event to the
-    browser about the updated state."""
+    """Called when the state of a resource is updated. Updates are batched so that
+    rapid successive changes (e.g. 96-channel pickup) are sent as a single message."""
 
-    # Send a `set_state` event to the browser.
-    data = {resource.name: resource.serialize_state()}
-    fut = self.send_command(event="set_state", data=data, wait_for_response=False)
-    asyncio.run_coroutine_threadsafe(fut, self.loop)
+    state = resource.serialize_state()
+    self.loop.call_soon_threadsafe(self._enqueue_state_update, resource.name, state)
+
+  def _enqueue_state_update(self, name: str, state: dict) -> None:
+    """Enqueue a state update on the event loop thread and schedule a flush if needed."""
+    self._pending_state_updates[name] = state
+    if not self._flush_scheduled:
+      self._flush_scheduled = True
+      self.loop.call_soon(self._flush_state_updates)
+
+  def _flush_state_updates(self) -> None:
+    """Send all pending state updates as a single ``set_state`` event."""
+    data = self._pending_state_updates
+    self._pending_state_updates = {}
+    self._flush_scheduled = False
+    if data:
+      fut = self.send_command(event="set_state", data=data, wait_for_response=False)
+      asyncio.ensure_future(fut)

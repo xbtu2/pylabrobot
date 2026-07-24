@@ -7,13 +7,26 @@ class ScaleBackend(MachineBackend, metaclass=ABCMeta):
   """Backend for a scale"""
 
   @abstractmethod
-  async def tare(self):
-    ...
+  async def zero(self): ...
 
   @abstractmethod
+  async def tare(self): ...
+
+  @abstractmethod
+  async def read_weight(self) -> float:
+    """Read the weight in grams"""
+    ...
+
+  # Deprecated: for backward compatibility
   async def get_weight(self) -> float:
-    """Get the weight in grams"""
+    """Deprecated: Use read_weight() instead.
 
-  @abstractmethod
-  async def zero(self):
-    ...
+    Get the weight in grams"""
+    import warnings
+
+    warnings.warn(
+      "get_weight() is deprecated and will be removed in 2026-03. Use read_weight() instead.",
+      DeprecationWarning,
+      stacklevel=2,
+    )
+    return await self.read_weight()

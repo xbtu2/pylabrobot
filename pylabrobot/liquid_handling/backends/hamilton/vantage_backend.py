@@ -485,9 +485,9 @@ class VantageBackend(HamiltonLiquidHandler):
     x_positions, y_positions, tip_pattern = self._ops_to_fw_positions(ops, use_channels)
 
     tips = [cast(HamiltonTip, op.resource.get_tip()) for op in ops]
-    ttti = await self.get_ttti(tips)
+    ttti = [await self.get_or_assign_tip_type_index(tip) for tip in tips]
 
-    max_z = max(op.resource.get_absolute_location().z + op.offset.z for op in ops)
+    max_z = max(op.resource.get_location_wrt(self.deck).z + op.offset.z for op in ops)
     max_total_tip_length = max(op.tip.total_tip_length for op in ops)
     max_tip_length = max((op.tip.total_tip_length - op.tip.fitting_depth) for op in ops)
 
@@ -532,7 +532,7 @@ class VantageBackend(HamiltonLiquidHandler):
 
     x_positions, y_positions, channels_involved = self._ops_to_fw_positions(ops, use_channels)
 
-    max_z = max(op.resource.get_absolute_location().z + op.offset.z for op in ops)
+    max_z = max(op.resource.get_location_wrt(self.deck).z + op.offset.z for op in ops)
 
     try:
       return await self.pip_tip_discard(
@@ -561,9 +561,9 @@ class VantageBackend(HamiltonLiquidHandler):
   def _assert_valid_resources(self, resources: Sequence[Resource]) -> None:
     """Assert that resources are in a valid location for pipetting."""
     for resource in resources:
-      if resource.get_absolute_location().z < 100:
+      if resource.get_location_wrt(self.deck).z < 100:
         raise ValueError(
-          f"Resource {resource} is too low: {resource.get_absolute_location().z} < 100"
+          f"Resource {resource} is too low: {resource.get_location_wrt(self.deck).z} < 100"
         )
 
   async def aspirate(
@@ -604,6 +604,7 @@ class VantageBackend(HamiltonLiquidHandler):
     tadm_algorithm_on_off: int = 0,
     limit_curve_index: Optional[List[int]] = None,
     recording_mode: int = 0,
+    disable_volume_correction: Optional[List[bool]] = None,
   ):
     """Aspirate from (a) resource(s).
 
@@ -620,7 +621,14 @@ class VantageBackend(HamiltonLiquidHandler):
         documentation, "empty" is used for a different mode (dm4).
       hlcs: The Hamiltonian liquid classes to use. If `None`, the liquid classes will be
         determined automatically based on the tip and liquid used.
+      disable_volume_correction: Whether to disable volume correction for each operation.
     """
+
+    if mix_volume is not None or mix_cycles is not None or mix_speed is not None:
+      raise NotImplementedError(
+        "Mixing through backend kwargs is deprecated. Use the `mix` parameter of LiquidHandler.dispense instead. "
+        "https://docs.pylabrobot.org/user_guide/00_liquid-handling/mixing.html"
+      )
 
     x_positions, y_positions, channels_involved = self._ops_to_fw_positions(ops, use_channels)
 
@@ -632,17 +640,13 @@ class VantageBackend(HamiltonLiquidHandler):
     if hlcs is None:
       hlcs = []
       for j, bo, op in zip(jet, blow_out, ops):
-        liquid = Liquid.WATER  # default to WATER
-        # [-1][0]: get last liquid in well, [0] is indexing into the tuple
-        if len(op.liquids) > 0 and op.liquids[-1][0] is not None:
-          liquid = op.liquids[-1][0]
         hlcs.append(
           get_vantage_liquid_class(
             tip_volume=op.tip.maximal_volume,
             is_core=False,
             is_tip=True,
             has_filter=op.tip.has_filter,
-            liquid=liquid,
+            liquid=Liquid.WATER,  # default to WATER
             jet=j,
             blow_out=bo,
           )
@@ -650,14 +654,15 @@ class VantageBackend(HamiltonLiquidHandler):
 
     self._assert_valid_resources([op.resource for op in ops])
 
-    # correct volumes using the liquid class
+    # correct volumes using the liquid class if not disabled
+    disable_volume_correction = disable_volume_correction or [False] * len(ops)
     volumes = [
-      hlc.compute_corrected_volume(op.volume) if hlc is not None else op.volume
-      for op, hlc in zip(ops, hlcs)
+      hlc.compute_corrected_volume(op.volume) if hlc is not None and not disabled else op.volume
+      for op, hlc, disabled in zip(ops, hlcs, disable_volume_correction)
     ]
 
     well_bottoms = [
-      op.resource.get_absolute_location().z + op.offset.z + op.resource.material_z_thickness
+      op.resource.get_location_wrt(self.deck).z + op.offset.z + op.resource.material_z_thickness
       for op in ops
     ]
     liquid_surfaces_no_lld = liquid_surface_at_function_without_lld or [
@@ -730,12 +735,12 @@ class VantageBackend(HamiltonLiquidHandler):
       ],
       swap_speed=[round(ss * 10) for ss in swap_speed or [2] * len(ops)],
       settling_time=[round(st * 10) for st in settling_time or [1] * len(ops)],
-      mix_volume=[round(mv * 100) for mv in mix_volume or [0] * len(ops)],
-      mix_cycles=mix_cycles or [0] * len(ops),
+      mix_volume=[round(op.mix.volume * 100) if op.mix is not None else 0 for op in ops],
+      mix_cycles=[op.mix.repetitions if op.mix is not None else 0 for op in ops],
       mix_position_in_z_direction_from_liquid_surface=[
         round(mp) for mp in mix_position_in_z_direction_from_liquid_surface or [0] * len(ops)
       ],
-      mix_speed=[round(ms * 10) for ms in mix_speed or [250] * len(ops)],
+      mix_speed=[round(op.mix.flow_rate * 10) if op.mix is not None else 2500 for op in ops],
       surface_following_distance_during_mixing=[
         round(sfdm * 10) for sfdm in surface_following_distance_during_mixing or [0] * len(ops)
       ],
@@ -784,6 +789,7 @@ class VantageBackend(HamiltonLiquidHandler):
     tadm_algorithm_on_off: int = 0,
     limit_curve_index: Optional[List[int]] = None,
     recording_mode: int = 0,
+    disable_volume_correction: Optional[List[bool]] = None,
   ):
     """Dispense to (a) resource(s).
 
@@ -806,7 +812,14 @@ class VantageBackend(HamiltonLiquidHandler):
       empty: Whether to use "empty" dispense mode for each dispense. Defaults to `False` for all.
         Truly empty the tip, not available in the VENUS liquid editor, but is in the firmware
         documentation. Dispense mode 4.
+      disable_volume_correction: Whether to disable volume correction for each operation.
     """
+
+    if mix_volume is not None or mix_cycles is not None or mix_speed is not None:
+      raise NotImplementedError(
+        "Mixing through backend kwargs is deprecated. Use the `mix` parameter of LiquidHandler.dispense instead. "
+        "https://docs.pylabrobot.org/user_guide/00_liquid-handling/mixing.html"
+      )
 
     x_positions, y_positions, channels_involved = self._ops_to_fw_positions(ops, use_channels)
 
@@ -820,17 +833,13 @@ class VantageBackend(HamiltonLiquidHandler):
     if hlcs is None:
       hlcs = []
       for j, bo, op in zip(jet, blow_out, ops):
-        liquid = Liquid.WATER  # default to WATER
-        # [-1][0]: get last liquid in tip, [0] is indexing into the tuple
-        if len(op.liquids) > 0 and op.liquids[-1][0] is not None:
-          liquid = op.liquids[-1][0]
         hlcs.append(
           get_vantage_liquid_class(
             tip_volume=op.tip.maximal_volume,
             is_core=False,
             is_tip=True,
             has_filter=op.tip.has_filter,
-            liquid=liquid,
+            liquid=Liquid.WATER,  # default to WATER
             jet=j,
             blow_out=bo,
           )
@@ -839,13 +848,14 @@ class VantageBackend(HamiltonLiquidHandler):
     self._assert_valid_resources([op.resource for op in ops])
 
     # correct volumes using the liquid class
+    disable_volume_correction = disable_volume_correction or [False] * len(ops)
     volumes = [
-      hlc.compute_corrected_volume(op.volume) if hlc is not None else op.volume
-      for op, hlc in zip(ops, hlcs)
+      hlc.compute_corrected_volume(op.volume) if hlc is not None and not disabled else op.volume
+      for op, hlc, disabled in zip(ops, hlcs, disable_volume_correction)
     ]
 
     well_bottoms = [
-      op.resource.get_absolute_location().z + op.offset.z + op.resource.material_z_thickness
+      op.resource.get_location_wrt(self.deck).z + op.offset.z + op.resource.material_z_thickness
       for op in ops
     ]
     liquid_surfaces_no_lld = [wb + (op.liquid_height or 0) for wb, op in zip(well_bottoms, ops)]
@@ -922,12 +932,12 @@ class VantageBackend(HamiltonLiquidHandler):
       pressure_lld_sensitivity=pressure_lld_sensitivity or [1] * len(ops),
       swap_speed=[round(ss * 10) for ss in swap_speed or [1] * len(ops)],
       settling_time=[round(st * 10) for st in settling_time or [0] * len(ops)],
-      mix_volume=[round(mv * 100) for mv in mix_volume or [0] * len(ops)],
-      mix_cycles=mix_cycles or [0] * len(ops),
+      mix_volume=[round(op.mix.volume * 100) if op.mix is not None else 0 for op in ops],
+      mix_cycles=[op.mix.repetitions if op.mix is not None else 0 for op in ops],
       mix_position_in_z_direction_from_liquid_surface=[
         round(mp) for mp in mix_position_in_z_direction_from_liquid_surface or [0] * len(ops)
       ],
-      mix_speed=[round(ms * 10) for ms in mix_speed or [1] * len(ops)],
+      mix_speed=[round(op.mix.flow_rate * 100) if op.mix is not None else 10 for op in ops],
       surface_following_distance_during_mixing=[
         round(sfdm * 10) for sfdm in surface_following_distance_during_mixing or [0] * len(ops)
       ],
@@ -956,7 +966,7 @@ class VantageBackend(HamiltonLiquidHandler):
       raise ValueError("No tips found in the tip rack.")
     assert isinstance(prototypical_tip, HamiltonTip), "Tip type must be HamiltonTip."
     ttti = await self.get_or_assign_tip_type_index(prototypical_tip)
-    position = tip_spot_a1.get_absolute_location() + tip_spot_a1.center() + pickup.offset
+    position = tip_spot_a1.get_location_wrt(self.deck) + tip_spot_a1.center() + pickup.offset
     offset_z = pickup.offset.z
 
     return await self.core96_tip_pick_up(
@@ -983,7 +993,7 @@ class VantageBackend(HamiltonLiquidHandler):
     # assert self.core96_head_installed, "96 head must be installed"
     if isinstance(drop.resource, TipRack):
       tip_spot_a1 = drop.resource.get_item("A1")
-      position = tip_spot_a1.get_absolute_location() + tip_spot_a1.center() + drop.offset
+      position = tip_spot_a1.get_location_wrt(self.deck) + tip_spot_a1.center() + drop.offset
     else:
       raise NotImplementedError(
         "Only TipRacks are supported for dropping tips on Vantage",
@@ -1028,11 +1038,12 @@ class VantageBackend(HamiltonLiquidHandler):
     mix_cycles: int = 0,
     mix_position_in_z_direction_from_liquid_surface: float = 0,
     surface_following_distance_during_mixing: float = 0,
-    mix_speed: float = 2,
+    mix_speed: float = 0,
     limit_curve_index: int = 0,
     tadm_channel_pattern: Optional[List[bool]] = None,
     tadm_algorithm_on_off: int = 0,
     recording_mode: int = 0,
+    disable_volume_correction: bool = False,
   ):
     """Aspirate from a plate.
 
@@ -1043,8 +1054,15 @@ class VantageBackend(HamiltonLiquidHandler):
         documentation.
       hlc: The Hamiltonian liquid classes to use. If `None`, the liquid classes will be
         determined automatically based on the tip and liquid used in the first well.
+      disable_volume_correction: Whether to disable volume correction.
     """
     # assert self.core96_head_installed, "96 head must be installed"
+
+    if mix_volume != 0 or mix_cycles != 0 or mix_speed != 0:
+      raise NotImplementedError(
+        "Mixing through backend kwargs is deprecated. Use the `mix` parameter of LiquidHandler.dispense96 instead. "
+        "https://docs.pylabrobot.org/user_guide/00_liquid-handling/mixing.html"
+      )
 
     if isinstance(aspiration, MultiHeadAspirationPlate):
       plate = aspiration.wells[0].parent
@@ -1059,7 +1077,7 @@ class VantageBackend(HamiltonLiquidHandler):
       else:
         raise ValueError("96 head only supports plate rotations of 0 or 180 degrees around z")
       position = (
-        ref_well.get_absolute_location()
+        ref_well.get_location_wrt(self.deck)
         + ref_well.center()
         + aspiration.offset
         + Coordinate(z=ref_well.material_z_thickness)
@@ -1073,7 +1091,7 @@ class VantageBackend(HamiltonLiquidHandler):
       x_position = (aspiration.container.get_absolute_size_x() - x_width) / 2
       y_position = (aspiration.container.get_absolute_size_y() - y_width) / 2 + y_width
       position = (
-        aspiration.container.get_absolute_location(z="cavity_bottom")
+        aspiration.container.get_location_wrt(self.deck, z="cavity_bottom")
         + Coordinate(x=x_position, y=y_position)
         + aspiration.offset
       )
@@ -1082,25 +1100,22 @@ class VantageBackend(HamiltonLiquidHandler):
 
     liquid_height = position.z + (aspiration.liquid_height or 0)
 
-    tip = aspiration.tips[0]
-    liquid_to_be_aspirated = Liquid.WATER  # default to water
-    if len(aspiration.liquids[0]) > 0 and aspiration.liquids[0][-1][0] is not None:
-      # first part of tuple in last liquid of first well
-      liquid_to_be_aspirated = aspiration.liquids[0][-1][0]
+    tip = next(tip for tip in aspiration.tips if tip is not None)
     if hlc is None:
       hlc = get_vantage_liquid_class(
         tip_volume=tip.maximal_volume,
         is_core=True,
         is_tip=True,
         has_filter=tip.has_filter,
-        liquid=liquid_to_be_aspirated,
+        liquid=Liquid.WATER,  # default to WATER
         jet=jet,
         blow_out=blow_out,
       )
 
-    volume = (
-      hlc.compute_corrected_volume(aspiration.volume) if hlc is not None else aspiration.volume
-    )
+    if disable_volume_correction or hlc is None:
+      volume = aspiration.volume
+    else:  # hlc is not None and not disable_volume_correction
+      volume = hlc.compute_corrected_volume(aspiration.volume)
 
     transport_air_volume = transport_air_volume or (
       hlc.aspiration_air_transport_volume if hlc is not None else 0
@@ -1141,15 +1156,15 @@ class VantageBackend(HamiltonLiquidHandler):
       lld_sensitivity=lld_sensitivity,
       swap_speed=round(swap_speed * 10),
       settling_time=round(settling_time * 10),
-      mix_volume=round(mix_volume * 100),
-      mix_cycles=mix_cycles,
+      mix_volume=round(aspiration.mix.volume * 100) if aspiration.mix is not None else 0,
+      mix_cycles=aspiration.mix.repetitions if aspiration.mix is not None else 0,
       mix_position_in_z_direction_from_liquid_surface=round(
         mix_position_in_z_direction_from_liquid_surface * 100
       ),
       surface_following_distance_during_mixing=round(
         surface_following_distance_during_mixing * 100
       ),
-      mix_speed=round(mix_speed * 10),
+      mix_speed=round(aspiration.mix.flow_rate * 10) if aspiration.mix is not None else 20,
       limit_curve_index=limit_curve_index,
       tadm_channel_pattern=tadm_channel_pattern,
       tadm_algorithm_on_off=tadm_algorithm_on_off,
@@ -1189,6 +1204,7 @@ class VantageBackend(HamiltonLiquidHandler):
     tadm_channel_pattern: Optional[List[bool]] = None,
     tadm_algorithm_on_off: int = 0,
     recording_mode: int = 0,
+    disable_volume_correction: bool = False,
   ):
     """Dispense to a plate using the 96 head.
 
@@ -1203,7 +1219,14 @@ class VantageBackend(HamiltonLiquidHandler):
 
       type_of_dispensing_mode: the type of dispense mode to use. If not provided, it will be
         determined based on the jet, blow_out, and empty parameters.
+      disable_volume_correction: Whether to disable volume correction.
     """
+
+    if mix_volume != 0 or mix_cycles != 0 or mix_speed is not None:
+      raise NotImplementedError(
+        "Mixing through backend kwargs is deprecated. Use the `mix` parameter of LiquidHandler.dispense96 instead. "
+        "https://docs.pylabrobot.org/user_guide/00_liquid-handling/mixing.html"
+      )
 
     if isinstance(dispense, MultiHeadDispensePlate):
       plate = dispense.wells[0].parent
@@ -1218,7 +1241,7 @@ class VantageBackend(HamiltonLiquidHandler):
       else:
         raise ValueError("96 head only supports plate rotations of 0 or 180 degrees around z")
       position = (
-        ref_well.get_absolute_location()
+        ref_well.get_location_wrt(self.deck)
         + ref_well.center()
         + dispense.offset
         + Coordinate(z=ref_well.material_z_thickness)
@@ -1232,7 +1255,7 @@ class VantageBackend(HamiltonLiquidHandler):
       x_position = (dispense.container.get_absolute_size_x() - x_width) / 2
       y_position = (dispense.container.get_absolute_size_y() - y_width) / 2 + y_width
       position = (
-        dispense.container.get_absolute_location(z="cavity_bottom")
+        dispense.container.get_location_wrt(self.deck, z="cavity_bottom")
         + Coordinate(x=x_position, y=y_position)
         + dispense.offset
       )
@@ -1241,22 +1264,22 @@ class VantageBackend(HamiltonLiquidHandler):
 
     liquid_height = position.z + (dispense.liquid_height or 0) + 10
 
-    tip = dispense.tips[0]
-    liquid_to_be_dispensed = Liquid.WATER  # default to WATER
-    if len(dispense.liquids[0]) > 0 and dispense.liquids[0][-1][0] is not None:
-      # first part of tuple in last liquid of first well
-      liquid_to_be_dispensed = dispense.liquids[0][-1][0]
+    tip = next(tip for tip in dispense.tips if tip is not None)
     if hlc is None:
       hlc = get_vantage_liquid_class(
         tip_volume=tip.maximal_volume,
         is_core=True,
         is_tip=True,
         has_filter=tip.has_filter,
-        liquid=liquid_to_be_dispensed,
+        liquid=Liquid.WATER,  # default to WATER
         jet=jet,
         blow_out=blow_out,  # see method docstring
       )
-    volume = hlc.compute_corrected_volume(dispense.volume) if hlc is not None else dispense.volume
+
+    if disable_volume_correction or hlc is None:
+      volume = dispense.volume
+    else:  # hlc is not None and not disable_volume_correction
+      volume = hlc.compute_corrected_volume(dispense.volume)
 
     transport_air_volume = transport_air_volume or (
       hlc.dispense_air_transport_volume if hlc is not None else 0
@@ -1267,7 +1290,6 @@ class VantageBackend(HamiltonLiquidHandler):
     flow_rate = dispense.flow_rate or (hlc.dispense_flow_rate if hlc is not None else 250)
     swap_speed = swap_speed or (hlc.dispense_swap_speed if hlc is not None else 100)
     settling_time = settling_time or (hlc.dispense_settling_time if hlc is not None else 5)
-    mix_speed = mix_speed or (hlc.dispense_mix_flow_rate if hlc is not None else 100)
     type_of_dispensing_mode = type_of_dispensing_mode or _get_dispense_mode(
       jet=jet, empty=empty, blow_out=blow_out
     )
@@ -1303,13 +1325,13 @@ class VantageBackend(HamiltonLiquidHandler):
       side_touch_off_distance=round(side_touch_off_distance * 10),
       swap_speed=round(swap_speed * 10),
       settling_time=round(settling_time * 10),
-      mix_volume=round(mix_volume * 10),
-      mix_cycles=mix_cycles,
+      mix_volume=round(dispense.mix.volume * 100) if dispense.mix is not None else 0,
+      mix_cycles=dispense.mix.repetitions if dispense.mix is not None else 0,
       mix_position_in_z_direction_from_liquid_surface=round(
         mix_position_in_z_direction_from_liquid_surface * 10
       ),
       surface_following_distance_during_mixing=round(surface_following_distance_during_mixing * 10),
-      mix_speed=round(mix_speed * 10),
+      mix_speed=round(dispense.mix.flow_rate * 10) if dispense.mix is not None else 10,
       limit_curve_index=limit_curve_index,
       tadm_channel_pattern=tadm_channel_pattern,
       tadm_algorithm_on_off=tadm_algorithm_on_off,
@@ -1329,7 +1351,7 @@ class VantageBackend(HamiltonLiquidHandler):
     """Pick up a resource with the IPG. You probably want to use :meth:`move_resource`, which
     allows you to pick up and move a resource with a single command."""
 
-    center = pickup.resource.get_absolute_location(x="c", y="c", z="b") + pickup.offset
+    center = pickup.resource.get_location_wrt(self.deck, x="c", y="c", z="b") + pickup.offset
     grip_height = center.z + pickup.resource.get_absolute_size_z() - pickup.pickup_distance_from_top
     plate_width = pickup.resource.get_absolute_size_x()
 
@@ -1618,17 +1640,17 @@ class VantageBackend(HamiltonLiquidHandler):
 
     if not 0 <= tip_type_table_index <= 99:
       raise ValueError(
-        "tip_type_table_index must be between 0 and 99, but is " f"{tip_type_table_index}"
+        f"tip_type_table_index must be between 0 and 99, but is {tip_type_table_index}"
       )
     if not 0 <= tip_type_table_index <= 99:
       raise ValueError(
-        "tip_type_table_index must be between 0 and 99, but is " f"{tip_type_table_index}"
+        f"tip_type_table_index must be between 0 and 99, but is {tip_type_table_index}"
       )
     if not 1 <= tip_length <= 1999:
-      raise ValueError("tip_length must be between 1 and 1999, but is " f"{tip_length}")
+      raise ValueError(f"tip_length must be between 1 and 1999, but is {tip_length}")
     if not 1 <= maximum_tip_volume <= 56000:
       raise ValueError(
-        "maximum_tip_volume must be between 1 and 56000, but is " f"{maximum_tip_volume}"
+        f"maximum_tip_volume must be between 1 and 56000, but is {maximum_tip_volume}"
       )
 
     return await self.send_command(
@@ -1780,8 +1802,7 @@ class VantageBackend(HamiltonLiquidHandler):
       0 <= x <= 3600 for x in pull_out_distance_to_take_transport_air_in_function_without_lld
     ):
       raise ValueError(
-        "pull_out_distance_to_take_transport_air_in_function_without_lld must be "
-        "in range 0 to 3600"
+        "pull_out_distance_to_take_transport_air_in_function_without_lld must be in range 0 to 3600"
       )
 
     if tube_2nd_section_height_measured_from_zm is None:
@@ -2095,8 +2116,7 @@ class VantageBackend(HamiltonLiquidHandler):
       0 <= x <= 3600 for x in pull_out_distance_to_take_transport_air_in_function_without_lld
     ):
       raise ValueError(
-        "pull_out_distance_to_take_transport_air_in_function_without_lld must be "
-        "in range 0 to 3600"
+        "pull_out_distance_to_take_transport_air_in_function_without_lld must be in range 0 to 3600"
       )
 
     if immersion_depth is None:
@@ -2436,8 +2456,7 @@ class VantageBackend(HamiltonLiquidHandler):
       0 <= x <= 3600 for x in pull_out_distance_to_take_transport_air_in_function_without_lld
     ):
       raise ValueError(
-        "pull_out_distance_to_take_transport_air_in_function_without_lld must be "
-        "in range 0 to 3600"
+        "pull_out_distance_to_take_transport_air_in_function_without_lld must be in range 0 to 3600"
       )
 
     if minimum_height is None:
@@ -3866,6 +3885,16 @@ class VantageBackend(HamiltonLiquidHandler):
     presences_int = cast(List[int], resp["rt"])
     return [bool(p) for p in presences_int]
 
+  async def request_tip_presence(self) -> List[Optional[bool]]:
+    """Request tip presence on each channel.
+
+    Returns:
+      A list of length `num_channels` where each element is `True` if a tip is mounted,
+      `False` if not, or `None` if unknown.
+    """
+    result: List[Optional[bool]] = list(await self.query_tip_presence())
+    return result
+
   async def request_height_of_last_lld(self):
     """Request height of last LLD"""
 
@@ -4049,8 +4078,7 @@ class VantageBackend(HamiltonLiquidHandler):
 
     if not 0 <= pull_out_distance_to_take_transport_air_in_function_without_lld <= 3900:
       raise ValueError(
-        "pull_out_distance_to_take_transport_air_in_function_without_lld must be in "
-        "range 0 to 3900"
+        "pull_out_distance_to_take_transport_air_in_function_without_lld must be in range 0 to 3900"
       )
 
     if not 0 <= minimum_height <= 3900:
@@ -4117,7 +4145,7 @@ class VantageBackend(HamiltonLiquidHandler):
       tadm_channel_pattern = [True] * 96
     elif not len(tadm_channel_pattern) < 24:
       raise ValueError(
-        "tadm_channel_pattern must be of length 24, but is " f"'{len(tadm_channel_pattern)}'"
+        f"tadm_channel_pattern must be of length 24, but is '{len(tadm_channel_pattern)}'"
       )
     tadm_channel_pattern_num = sum(2**i if tadm_channel_pattern[i] else 0 for i in range(96))
 
@@ -4270,8 +4298,7 @@ class VantageBackend(HamiltonLiquidHandler):
 
     if not 0 <= pull_out_distance_to_take_transport_air_in_function_without_lld <= 3900:
       raise ValueError(
-        "pull_out_distance_to_take_transport_air_in_function_without_lld must be in "
-        "range 0 to 3900"
+        "pull_out_distance_to_take_transport_air_in_function_without_lld must be in range 0 to 3900"
       )
 
     if not -990 <= immersion_depth <= 990:
@@ -4341,7 +4368,7 @@ class VantageBackend(HamiltonLiquidHandler):
       tadm_channel_pattern = [True] * 96
     elif not len(tadm_channel_pattern) < 24:
       raise ValueError(
-        "tadm_channel_pattern must be of length 24, but is " f"'{len(tadm_channel_pattern)}'"
+        f"tadm_channel_pattern must be of length 24, but is '{len(tadm_channel_pattern)}'"
       )
     tadm_channel_pattern_num = sum(2**i if tadm_channel_pattern[i] else 0 for i in range(96))
 
@@ -4683,7 +4710,7 @@ class VantageBackend(HamiltonLiquidHandler):
       tadm_channel_pattern = [True] * 96
     elif not len(tadm_channel_pattern) < 24:
       raise ValueError(
-        "tadm_channel_pattern must be of length 24, but is " f"'{len(tadm_channel_pattern)}'"
+        f"tadm_channel_pattern must be of length 24, but is '{len(tadm_channel_pattern)}'"
       )
     tadm_channel_pattern_num = sum(2**i if tadm_channel_pattern[i] else 0 for i in range(96))
 

@@ -20,6 +20,15 @@ PN = "PN"
 tro = "tro"
 FO = "FO"
 UE = "UE"
+commutated = "commutated"
+commutating = "commutating"
+DOUT = "DOUT"
+inconsistence = "inconsistence"
+mis = "mis"
+RHE = "RHE"
+"ASEND" = "ASEND"
+caf = "caf"
+scap = "scap"
 
 [files]
 extend-exclude = [

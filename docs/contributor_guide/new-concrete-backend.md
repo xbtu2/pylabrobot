@@ -1,4 +1,4 @@
-# Adding support for a new machine of an existing type
+# Adding Support for a New Machine of an Existing Type
 
 This guide explains how to add support for a new machine of an existing type. For example, if you want to add support for a new liquid handler, you should read this guide. If you want to add support for a new type of machine, you should read {doc}`this guide <new-machine-type>` first.
 
@@ -6,8 +6,8 @@ The machine types that are currently can be found [here](/user_guide/machines).
 
 Two documents that you can read before you start are:
 
-- [CONTRIBUTING.md](https://github.com/PyLabRobot/pylabrobot/blob/main/CONTRIBUTING.md): This document contains general information about contributing to PyLabRobot, and covers things like installation and testing.
-- [How to Open Source](https://docs.pylabrobot.org/how-to-open-source.html): This document contains step-by-step instructions for contributing to an open source project. It is not specific to PyLabRobot, and serves as a reference.
+- [Contributing to PyLabRobot](contributing.md): This document contains general information about contributing to PyLabRobot, and covers things like installation and testing.
+- [How to Open Source](how-to-open-source.md): This document contains step-by-step instructions for contributing to an open source project. It is not specific to PyLabRobot, and serves as a reference.
 
 Thank you for contributing to PyLabRobot!
 

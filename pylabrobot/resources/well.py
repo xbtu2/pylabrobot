@@ -1,6 +1,6 @@
 import enum
 import math
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from pylabrobot.resources.container import Container
 from pylabrobot.resources.liquid import Liquid
@@ -49,6 +49,8 @@ class Well(Container):
     compute_volume_from_height: Optional[Callable[[float], float]] = None,
     compute_height_from_volume: Optional[Callable[[float], float]] = None,
     cross_section_type: Union[CrossSectionType, str] = CrossSectionType.CIRCLE,
+    height_volume_data: Optional[Dict[float, float]] = None,
+    no_go_zones=None,
   ):
     """Create a new well.
 
@@ -66,6 +68,8 @@ class Well(Container):
         bottom
       cross_section_type: Type of the cross section of the well. If not specified, the well will be
         seen as a cylinder.
+      height_volume_data: Optional dict mapping height (mm) to volume (uL). See
+        :class:`Container` for details.
     """
 
     if isinstance(bottom_type, str):
@@ -95,11 +99,11 @@ class Well(Container):
       compute_volume_from_height=compute_volume_from_height,
       compute_height_from_volume=compute_height_from_volume,
       material_z_thickness=material_z_thickness,
+      height_volume_data=height_volume_data,
+      no_go_zones=no_go_zones,
     )
     self.bottom_type = bottom_type
     self.cross_section_type = cross_section_type
-
-    self.tracker.register_callback(self._state_updated)
 
   def serialize(self):
     return {
@@ -108,24 +112,40 @@ class Well(Container):
       "cross_section_type": self.cross_section_type.value,
     }
 
+  def set_volume(self, volume: float):
+    """Set the volume of the well.
+
+    (wraps :meth:`~.VolumeTracker.set_volume`)
+
+    Example:
+      Set the volume in a well to 10 uL:
+
+      >>> well.set_volume(10)
+    """
+
+    self.tracker.set_volume(volume)
+
   def set_liquids(self, liquids: List[Tuple[Optional["Liquid"], float]]):
     """Set the liquids in the well.
 
-    (wraps :meth:`~.VolumeTracker.set_liquids`)
-
-    Example:
-      Set the liquids in a well to 10 uL of water:
-
-      >>> well.set_liquids([(Liquid.WATER, 10)])
+    Deprecated: Use `set_volume` instead. This method will be removed in a future version.
     """
 
     self.tracker.set_liquids(liquids)
 
-  def get_identifier(self) -> str:
-    """Get the (canonical) identifier, like `"A1"` of the well in the parent plate. If the well is
-    not in a plate, this will raise a ValueError."""
-
+  def _get_parent_plate(self) -> Plate:
     if self.parent is None or not isinstance(self.parent, Plate):
-      raise ValueError("Well must be in a plate to get its identifier.")
+      raise ValueError("Well must be in a plate to get its parent plate.")
+    return self.parent
 
-    return self.parent.get_child_identifier(self)
+  def get_identifier(self) -> str:
+    """Get the (canonical) identifier, like `"A1"` of the well in the parent plate. If the well is not in a plate, this will raise a ValueError."""
+    return self._get_parent_plate().get_child_identifier(self)
+
+  def get_row(self) -> int:
+    """Get the row (0-indexed) of the well in the parent plate. If the well is not in a plate, this will raise a ValueError."""
+    return self._get_parent_plate().get_child_row(self)
+
+  def get_column(self) -> int:
+    """Get the column (0-indexed) of the well in the parent plate. If the well is not in a plate, this will raise a ValueError."""
+    return self._get_parent_plate().get_child_column(self)

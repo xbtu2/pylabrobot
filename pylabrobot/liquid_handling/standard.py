@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, List, Optional, Sequence, Union
 
 from pylabrobot.resources.coordinate import Coordinate
-from pylabrobot.resources.liquid import Liquid
 from pylabrobot.resources.rotation import Rotation
 
 if TYPE_CHECKING:
@@ -40,6 +39,7 @@ class Drop:
 class PickupTipRack:
   resource: TipRack
   offset: Coordinate
+  tips: Sequence[Optional[Tip]]
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,7 @@ class SingleChannelAspiration:
   flow_rate: Optional[float]
   liquid_height: Optional[float]
   blow_out_air_volume: Optional[float]
-  liquids: List[Tuple[Optional[Liquid], float]]
+  mix: Optional[Mix]
 
 
 @dataclass(frozen=True)
@@ -69,55 +69,73 @@ class SingleChannelDispense:
   flow_rate: Optional[float]
   liquid_height: Optional[float]
   blow_out_air_volume: Optional[float]
-  liquids: List[Tuple[Optional[Liquid], float]]
+  mix: Optional[Mix]
+
+
+@dataclass(frozen=True)
+class Mix:
+  """Repeated aspirate/dispense cycles to mix the liquid during a transfer.
+
+  Args:
+    volume: The volume drawn then expelled each cycle.
+    repetitions: The number of aspirate/dispense cycles.
+    flow_rate: The flow rate of the mix.
+    surface_following_distance: The distance (mm) the tip follows the liquid surface each cycle on
+      backends that support it (e.g. Hamilton STAR); others ignore it.
+  """
+
+  volume: float
+  repetitions: int
+  flow_rate: float
+  surface_following_distance: Optional[float] = None
 
 
 @dataclass(frozen=True)
 class MultiHeadAspirationPlate:
   wells: List[Well]
   offset: Coordinate
-  tips: List[Tip]
+  tips: Sequence[Optional[Tip]]
   volume: float
   flow_rate: Optional[float]
   liquid_height: Optional[float]
   blow_out_air_volume: Optional[float]
-  liquids: List[List[Tuple[Optional[Liquid], float]]]
+  mix: Optional[Mix]
 
 
 @dataclass(frozen=True)
 class MultiHeadDispensePlate:
   wells: List[Well]
   offset: Coordinate
-  tips: List[Tip]
+  tips: Sequence[Optional[Tip]]
   volume: float
   flow_rate: Optional[float]
   liquid_height: Optional[float]
   blow_out_air_volume: Optional[float]
-  liquids: List[List[Tuple[Optional[Liquid], float]]]
+  mix: Optional[Mix]
 
 
 @dataclass(frozen=True)
 class MultiHeadAspirationContainer:
   container: Container
   offset: Coordinate
-  tips: List[Tip]
+  tips: Sequence[Optional[Tip]]
   volume: float
   flow_rate: Optional[float]
   liquid_height: Optional[float]
   blow_out_air_volume: Optional[float]
-  liquids: List[List[Tuple[Optional[Liquid], float]]]
+  mix: Optional[Mix]
 
 
 @dataclass(frozen=True)
 class MultiHeadDispenseContainer:
   container: Container
   offset: Coordinate
-  tips: List[Tip]
+  tips: Sequence[Optional[Tip]]
   volume: float
   flow_rate: Optional[float]
   liquid_height: Optional[float]
   blow_out_air_volume: Optional[float]
-  liquids: List[List[Tuple[Optional[Liquid], float]]]
+  mix: Optional[Mix]
 
 
 class GripDirection(enum.Enum):
@@ -155,7 +173,7 @@ class ResourceDrop:
   offset: Coordinate
   pickup_distance_from_top: float
   pickup_direction: GripDirection
-  drop_direction: GripDirection
+  direction: GripDirection
   rotation: float
 
 

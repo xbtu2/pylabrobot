@@ -1,9 +1,10 @@
 import math
 
+from pylabrobot.serializer import SerializableMixin
 from pylabrobot.utils.linalg import matrix_multiply_3x3
 
 
-class Rotation:
+class Rotation(SerializableMixin):
   """Represents a 3D rotation."""
 
   def __init__(self, x: float = 0, y: float = 0, z: float = 0):
@@ -68,3 +69,15 @@ class Rotation:
 
   def __repr__(self) -> str:
     return self.__str__()
+
+  @property
+  def roll(self) -> float:
+    return self.x
+
+  @property
+  def pitch(self) -> float:
+    return self.y
+
+  @property
+  def yaw(self) -> float:
+    return self.z

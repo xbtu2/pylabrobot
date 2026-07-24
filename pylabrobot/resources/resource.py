@@ -4,9 +4,9 @@ import itertools
 import json
 import logging
 import sys
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import Any, Callable, Dict, List, Optional, Union, cast
 
-from pylabrobot.serializer import deserialize, serialize
+from pylabrobot.serializer import SerializableMixin, deserialize, serialize
 from pylabrobot.utils.linalg import matrix_vector_multiply_3x3
 from pylabrobot.utils.object_parsing import find_subclass
 
@@ -23,6 +23,39 @@ else:
 logger = logging.getLogger("pylabrobot")
 
 
+def _compute_location_from_anchors(
+  parent: "Resource",
+  child: "Resource",
+  parent_anchor: Union[tuple[str, str, str], str],
+  child_anchor: Union[tuple[str, str, str], str],
+) -> Coordinate:
+  """Compute the location for a child resource to align anchor points.
+
+  Args:
+    parent: The parent resource.
+    child: The child resource to be assigned.
+    parent_anchor: Tuple of (x, y, z) anchor specifiers or a 3-character string for the parent.
+    child_anchor: Tuple of (x, y, z) anchor specifiers or a 3-character string for the child.
+
+  Returns:
+    The location to pass to assign_child_resource to align the anchors.
+  """
+  # Convert string anchors to tuples
+  if isinstance(parent_anchor, str):
+    if len(parent_anchor) != 3:
+      raise ValueError(f"Anchor string must be exactly 3 characters, got: {parent_anchor}")
+    parent_anchor = (parent_anchor[0], parent_anchor[1], parent_anchor[2])
+
+  if isinstance(child_anchor, str):
+    if len(child_anchor) != 3:
+      raise ValueError(f"Anchor string must be exactly 3 characters, got: {child_anchor}")
+    child_anchor = (child_anchor[0], child_anchor[1], child_anchor[2])
+
+  parent_anchor_pos = parent.get_anchor(x=parent_anchor[0], y=parent_anchor[1], z=parent_anchor[2])
+  child_anchor_pos = child.get_anchor(x=child_anchor[0], y=child_anchor[1], z=child_anchor[2])
+  return parent_anchor_pos - child_anchor_pos
+
+
 WillAssignResourceCallback = Callable[["Resource"], None]
 DidAssignResourceCallback = Callable[["Resource"], None]
 WillUnassignResourceCallback = Callable[["Resource"], None]
@@ -30,7 +63,7 @@ DidUnassignResourceCallback = Callable[["Resource"], None]
 ResourceDidUpdateState = Callable[[Dict[str, Any]], None]
 
 
-class Resource:
+class Resource(SerializableMixin):
   """Base class for deck resources.
 
   Args:
@@ -42,6 +75,8 @@ class Resource:
     category: The category of the resource, e.g. `tips`, `plate_carrier`, etc.
     model: The model of the resource (optional).
     barcode: The barcode of the resource (optional).
+    preferred_pickup_location: The location where the center of the gripper should be when picking
+      up this resource, relative to the resource's origin (optional).
   """
 
   def __init__(
@@ -54,6 +89,7 @@ class Resource:
     category: Optional[str] = None,
     model: Optional[str] = None,
     barcode: Optional[Barcode] = None,
+    preferred_pickup_location: Optional[Coordinate] = None,
   ):
     self._name = name
     self._size_x = size_x
@@ -64,6 +100,7 @@ class Resource:
     self.category = category
     self.model = model
     self.barcode = barcode
+    self.preferred_pickup_location = preferred_pickup_location
 
     self.location: Optional[Coordinate] = None
     self.parent: Optional[Resource] = None
@@ -99,6 +136,7 @@ class Resource:
       "category": self.category,
       "model": self.model,
       "barcode": self.barcode.serialize() if self.barcode is not None else None,
+      "preferred_pickup_location": serialize(self.preferred_pickup_location),
       "children": [child.serialize() for child in self.children],
       "parent_name": self.parent.name if self.parent is not None else None,
     }
@@ -217,7 +255,7 @@ class Resource:
     """
 
     if self.location is None:
-      raise NoLocationError(f"Resource {self.name} has no location.")
+      raise NoLocationError(f"Resource '{self.name}' has no location.")
 
     rotated_anchor = Coordinate(
       *matrix_vector_multiply_3x3(
@@ -226,7 +264,7 @@ class Resource:
       )
     )
 
-    if self.parent is None:
+    if self.parent is None or self.parent.location is None:
       return self.location + rotated_anchor
 
     parent_pos = self.parent.get_absolute_location()
@@ -237,6 +275,31 @@ class Resource:
       )
     )
     return parent_pos + rotated_location + rotated_anchor
+
+  def get_location_wrt(
+    self, other: Resource, x: str = "l", y: str = "f", z: str = "b"
+  ) -> Coordinate:
+    """Get the location of this resource with respect to another resource.
+
+    Args:
+      other: The resource to get the location with respect to.
+      x: `"l"`/`"left"`, `"c"`/`"center"`, or `"r"`/`"right"`
+      y: `"b"`/`"back"`, `"c"`/`"center"`, or `"f"`/`"front"`
+      z: `"t"`/`"top"`, `"c"`/`"center"`, or `"b"`/`"bottom"`
+    """
+
+    if not self.is_in_subtree_of(other):
+      raise ValueError(
+        f"Resources '{self.name}' is not in the subtree of '{other.name}'. "
+        "This operation is not currently supported."
+      )
+
+    other_absolute_lfb = (
+      other.get_absolute_location(x="l", y="f", z="b")
+      if other.location is not None
+      else Coordinate(0, 0, 0)
+    )
+    return self.get_absolute_location(x=x, y=y, z=z) - other_absolute_lfb
 
   def _get_rotated_corners(self) -> List[Coordinate]:
     absolute_rotation = self.get_absolute_rotation()
@@ -317,6 +380,59 @@ class Resource:
     for callback in self._did_assign_resource_callbacks:
       callback(resource)
 
+  def assign_child_by_anchor(
+    self,
+    resource: Resource,
+    parent_anchor: Union[tuple[str, str, str], str] = ("l", "f", "b"),
+    child_anchor: Union[tuple[str, str, str], str] = ("l", "f", "b"),
+    reassign: bool = True,
+  ):
+    """Assign a child resource by aligning anchor points.
+
+    This method computes the location needed to align the specified anchor points of the parent
+    and child resources, then calls :meth:`assign_child_resource` with the computed location.
+
+    Args:
+      resource: The resource to assign.
+      parent_anchor: Anchor specifiers for the parent. Can be either:
+        - A tuple of (x, y, z) strings, or
+        - A 3-character string (e.g., "lfb" for left-front-bottom)
+        Each element can be:
+        x: `"l"`/`"left"`, `"c"`/`"center"`, or `"r"`/`"right"`
+        y: `"b"`/`"back"`, `"c"`/`"center"`, or `"f"`/`"front"`
+        z: `"t"`/`"top"`, `"c"`/`"center"`, or `"b"`/`"bottom"`
+        Defaults to left-front-bottom.
+      child_anchor: Anchor specifiers for the child (same format as parent_anchor).
+        Defaults to left-front-bottom.
+      reassign: If `False`, an error will be raised if the resource to be assigned is already
+        assigned to this resource. Defaults to `True`.
+
+    Examples:
+      Align left-front-bottom (default behavior):
+
+      >>> parent = Resource("parent", size_x=100, size_y=100, size_z=10)
+      >>> child = Resource("child", size_x=80, size_y=80, size_z=5)
+      >>> parent.assign_child_by_anchor(child)  # Both default to LFB
+
+      Align the center-center-bottom using tuple syntax:
+
+      >>> parent.assign_child_by_anchor(child, parent_anchor=("c", "c", "b"),
+      ...                               child_anchor=("c", "c", "b"))
+
+      Align the center-center-bottom using string syntax:
+
+      >>> parent.assign_child_by_anchor(child, parent_anchor="ccb", child_anchor="ccb")
+
+      Stack on top by aligning parent's top with child's bottom:
+
+      >>> parent.assign_child_by_anchor(child, parent_anchor="lft", child_anchor="lfb")
+    """
+
+    location = _compute_location_from_anchors(
+      parent=self, child=resource, parent_anchor=parent_anchor, child_anchor=child_anchor
+    )
+    self.assign_child_resource(resource=resource, location=location, reassign=reassign)
+
   # Helper methods to call all callbacks. These are used to propagate callbacks up the tree.
   def _call_will_assign_resource_callbacks(self, resource: Resource):
     for callback in self._will_assign_resource_callbacks:
@@ -368,6 +484,10 @@ class Resource:
     if len(msgs) > 0:
       msg = " ".join(msgs)
       raise ValueError(msg)
+
+    # Prevent cycles (dropping an ancestor into its own subtree)
+    if self.is_in_subtree_of(resource):
+      raise ValueError(f"Cannot drop '{resource.name}' onto '{self.name}': would create a cycle.")
 
   def get_root(self) -> Resource:
     """Get the root of the resource tree."""
@@ -473,6 +593,9 @@ class Resource:
     self.rotation.x = (self.rotation.x + x) % 360
     self.rotation.y = (self.rotation.y + y) % 360
     self.rotation.z = (self.rotation.z + z) % 360
+    # Rotation is part of the resource's state; notify subscribers (e.g. the
+    # Visualizer) so they can re-render.
+    self._state_updated()
 
   def copy(self) -> Self:
     resource_copy = self.__class__.deserialize(self.serialize(), allow_marshal=True)
@@ -490,6 +613,12 @@ class Resource:
     """Return a copy of this resource at the given location."""
     new_resource = self.copy()
     new_resource.location = location
+    return new_resource
+
+  def named(self, name: str) -> Self:
+    """Return a copy of this resource with the given name."""
+    new_resource = self.copy()
+    new_resource.name = name
     return new_resource
 
   def center(self, x: bool = True, y: bool = True, z: bool = False) -> Coordinate:
@@ -628,10 +757,13 @@ class Resource:
     children_data = data_copy.pop("children")
     rotation = data_copy.pop("rotation")
     barcode = data_copy.pop("barcode", None)
+    preferred_pickup_location = data_copy.pop("preferred_pickup_location", None)
     resource = subclass(**deserialize(data_copy, allow_marshal=allow_marshal))
     resource.rotation = Rotation.deserialize(rotation)  # not pretty, should be done in init.
     if barcode is not None:
       resource.barcode = Barcode.deserialize(barcode)
+    if preferred_pickup_location is not None:
+      resource.preferred_pickup_location = cast(Coordinate, deserialize(preferred_pickup_location))
 
     for child_data in children_data:
       child_cls = find_subclass(child_data["type"], cls=Resource)
@@ -708,8 +840,13 @@ class Resource:
 
     Use :meth:`pylabrobot.resources.resource.Resource.serialize_all_state` to serialize the state of
     this resource and all children.
+
+    The base implementation includes ``"rotation"`` so that subscribers
+    (e.g. the Visualizer) are notified of orientation changes through the
+    standard state channel. Subclasses overriding this method should merge
+    in ``super().serialize_state()``.
     """
-    return {}
+    return {"rotation": self.rotation.serialize()}
 
   # Developer note: you probably don't need to override this method. Instead, override
   # `serialize_state`.
@@ -732,8 +869,13 @@ class Resource:
   # Developer note: this method deserializes the state of this resource only. If you want to
   # deserialize a custom state for a resource, override this method in the subclass.
   def load_state(self, state: Dict[str, Any]) -> None:
-    """Load state for this resource only."""
-    # no state to load by default
+    """Load state for this resource only.
+
+    The base implementation reads ``"rotation"`` if present. Subclasses
+    overriding this method should call ``super().load_state(state)``.
+    """
+    if "rotation" in state:
+      self.rotation = Rotation.deserialize(state["rotation"])
 
   # Developer note: you probably don't need to override this method. Instead, override `load_state`.
   def load_all_state(self, state: Dict[str, Dict[str, Any]]) -> None:
@@ -806,3 +948,27 @@ class Resource:
     for resource in self.children:
       highest_point = max(highest_point, resource.get_highest_known_point())
     return highest_point
+
+  def check_can_drop_resource_here(self, resource: Resource, *, reassign: bool = True) -> None:
+    """Validate whether `resource` may be dropped onto this resource.
+
+    Non-mutating preflight check used before assignment (e.g., drag/drop, LiquidHandler).
+    Enforces generic tree/assignment rules (reassign semantics, root name conflicts, no cycles).
+    Override in subclasses (and call `super()`) to add domain-specific constraints.
+
+    Raises:
+      ValueError: If the drop/assignment is not allowed.
+    """
+    # Baseline validity checks for attaching `resource` under `self`
+    # (delegated to `_check_assignment` to stay consistent as rules evolve).
+    self._check_assignment(resource=resource, reassign=reassign)
+
+    # Tree-wide invariants enforced at the root (e.g., global naming constraints).
+    # self.get_root()._check_naming_conflicts(resource=resource)
+
+    # Subclasses can add stricter “drop rules” here.
+    # Examples:
+    # - Enforce placement/geometry constraints (must fit, no overlaps, valid coordinates)
+    # - Enforce state/permission rules (locked, read-only, etc.)
+    # Base `Resource` does not impose any of those extra rules beyond the generic
+    # assignment safety checks.

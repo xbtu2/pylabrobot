@@ -20,10 +20,10 @@ class Deck(Resource):
 
   def __init__(
     self,
+    size_x: float,
+    size_y: float,
+    size_z: float,
     name: str = "deck",
-    size_x: float = 1360,
-    size_y: float = 653.5,
-    size_z: float = 900,
     origin: Coordinate = Coordinate(0, 0, 0),
     category: str = "deck",
   ):
@@ -82,6 +82,8 @@ class Deck(Resource):
     Raises:
       ResourceNotFoundError: If the resource is not found.
     """
+    if name == self.name:
+      return self
     if not self.has_resource(name):
       raise ResourceNotFoundError(f"Resource '{name}' not found")
     return self._resources[name]

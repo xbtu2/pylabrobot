@@ -25,16 +25,38 @@ function updateStatusLabel(status) {
 }
 
 function setRootResource(data) {
+  // Method signatures arrive once per class; make them available before the tree is
+  // built so each Resource can attach its methods by type.
+  methodRegistry = data.method_registry || {};
   resource = loadResource(data.resource);
 
   resource.location = { x: 0, y: 0, z: 0 };
   resource.draw(resourceLayer);
 
-  // center the root resource on the stage.
-  let centerXOffset = (stage.width() - resource.size_x) / 2;
-  let centerYOffset = (stage.height() - resource.size_y) / 2;
-  stage.x(centerXOffset);
-  stage.y(-centerYOffset);
+  // Store globally so fitToViewport() can use it.
+  rootResource = resource;
+
+  fitToViewport();
+
+  buildResourceTree(resource);
+
+  // Cache idle plates/tip racks so subsequent updates don't repaint them.
+  cacheAllIdleOwners();
+}
+
+// Save the full serialized resource data before it is destroyed.
+// Called from the resource_unassigned handler while the resource and all its
+// children are still intact. The serialized data is later used by buildSingleArm
+// to create a live Konva stage using the exact same draw() code as the main canvas.
+// Cost: one serialize() call per unassigned resource — negligible.
+function snapshotResource(resourceName) {
+  var res = resources[resourceName];
+  if (!res) return;
+  try {
+    resourceSnapshots[resourceName] = res.serialize();
+  } catch (e) {
+    console.warn("[snapshot] failed for " + resourceName, e);
+  }
 }
 
 function removeResource(resourceName) {
@@ -46,7 +68,15 @@ function setState(allStates) {
   for (let resourceName in allStates) {
     let state = allStates[resourceName];
     let resource = resources[resourceName];
-    resource.setState(state);
+    if (!resource) {
+      console.warn(`[setState] resource not found: ${resourceName}`);
+      continue;
+    }
+    try {
+      resource.setState(state);
+    } catch (e) {
+      console.error(`[setState] error for ${resourceName}:`, e);
+    }
   }
 }
 
@@ -57,19 +87,56 @@ async function processCentralEvent(event, data) {
       break;
 
     case "resource_assigned":
+      Object.assign(methodRegistry, data.method_registry || {});
       resource = loadResource(data.resource);
       resource.draw(resourceLayer);
       setState(data.state);
+      addResourceToTree(resource);
+      // Cache the newly-assigned plate/tip rack (or the owner it landed in).
+      cacheResourceGroup(getCacheOwner(resource));
       break;
 
     case "resource_unassigned":
+      // Snapshot the resource before destruction so the arm panel can show a
+      // pixel-perfect replica. Done here (not in destroy()) because the Konva
+      // group and all children are guaranteed intact at this point.
+      snapshotResource(data.resource_name);
+      removeResourceFromTree(data.resource_name);
       removeResource(data.resource_name);
       break;
 
     case "set_state":
       let allStates = data;
+      // Clear the cache on each affected plate/tip rack so the update renders live,
+      // then re-cache it once it goes idle (handled by markCacheOwnerActive).
+      let activeOwners = new Set();
+      for (let resourceName in allStates) {
+        let owner = getCacheOwner(resources[resourceName]);
+        if (owner) activeOwners.add(owner);
+      }
+      activeOwners.forEach(uncacheResourceGroup);
       setState(allStates);
+      activeOwners.forEach(markCacheOwnerActive);
+      // Update only the affected sidepanel nodes instead of rebuilding the entire
+      // tree. Wells/tip spots/tubes all refresh their parent's summary, so dedupe
+      // by target node to avoid recomputing the same plate/rack summary once per
+      // child (e.g. 96 identical refreshes for a single 96-channel operation).
+      let refreshedNodes = new Set();
+      for (let resourceName in allStates) {
+        let target = resources[resourceName];
+        let targetName = resourceName;
+        if (target && (target instanceof TipSpot || target instanceof Well || target instanceof Tube)
+            && target.parent) {
+          targetName = target.parent.name;
+        }
+        if (refreshedNodes.has(targetName)) continue;
+        refreshedNodes.add(targetName);
+        updateSidepanelState(resourceName);
+      }
+      break;
 
+    case "show_machine_tools":
+      openAllMachineToolPanels();
       break;
 
     default:
@@ -86,7 +153,7 @@ async function handleEvent(id, event, data) {
     return; // don't parse pongs.
   }
 
-  console.log("[event] " + event, data);
+  if (window.VIS_DEBUG) console.log("[event] " + event, data);
 
   const ret = {
     event: event,
@@ -123,9 +190,8 @@ function openSocket() {
 
   socketLoading = true;
   updateStatusLabel("loading");
-  let wsHostInput = document.querySelector(`input[id="ws_host"]`);
   let wsPortInput = document.querySelector(`input[id="ws_port"]`);
-  let wsHost = wsHostInput.value;
+  let wsHost = window.location.hostname;
   let wsPort = wsPortInput.value;
   webSocket = new WebSocket(`ws://${wsHost}:${wsPort}/`);
 
@@ -156,7 +222,7 @@ function openSocket() {
       if (value == "-Infinity") return -Infinity;
       return value;
     });
-    console.log(`[message] Data received from server:`, data);
+    if (window.VIS_DEBUG) console.log(`[message] Data received from server:`, data);
     handleEvent(data.id, data.event, data.data);
   });
 }

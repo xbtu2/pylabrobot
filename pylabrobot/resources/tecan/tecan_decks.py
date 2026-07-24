@@ -13,6 +13,7 @@ from pylabrobot.resources.tecan.wash import (
   Wash_Station_Waste,
 )
 from pylabrobot.resources.tip_rack import TipRack
+from pylabrobot.resources.trash import Trash
 
 _RAILS_WIDTH = 25
 
@@ -100,7 +101,7 @@ class TecanDeck(Deck):
         and rails is not None
       ):
         raise ValueError(
-          f"Resource with width {resource.get_absolute_size_x()} does not " f"fit at rails {rails}."
+          f"Resource with width {resource.get_absolute_size_x()} does not fit at rails {rails}."
         )
 
       # Check if there is space for this new resource.
@@ -122,8 +123,7 @@ class TecanDeck(Deck):
           < og_y + og_resource.get_absolute_size_y()
         ):
           raise ValueError(
-            f"Location {resource_location} is already occupied by resource "
-            f"'{og_resource.name}'."
+            f"Location {resource_location} is already occupied by resource '{og_resource.name}'."
           )
 
     return super().assign_child_resource(resource, location=resource_location)
@@ -165,7 +165,7 @@ class TecanDeck(Deck):
       r_summary = (
         f"{rail_label:4} ├── {resource.name:27}"
         + f"{resource.__class__.__name__:20}"
-        + f"{resource.get_absolute_location()}\n"
+        + f"{resource.get_location_wrt(self)}\n"
       )
 
       if isinstance(resource, Carrier):
@@ -176,11 +176,11 @@ class TecanDeck(Deck):
             subresource = site.resource
             if isinstance(subresource, (TipRack, Plate)):
               location = (
-                subresource.get_item("A1").get_absolute_location()
+                subresource.get_item("A1").get_location_wrt(self)
                 + subresource.get_item("A1").center()
               )
             else:
-              location = subresource.get_absolute_location()
+              location = subresource.get_location_wrt(self)
             r_summary += (
               f"     │   ├── {subresource.name:23}"
               + f"{subresource.__class__.__name__:20}"
@@ -190,7 +190,7 @@ class TecanDeck(Deck):
       return r_summary
 
     # Sort resources by rails, left to right in reality.
-    sorted_resources = sorted(self.children, key=lambda r: r.get_absolute_location().x)
+    sorted_resources = sorted(self.children, key=lambda r: r.get_location_wrt(self).x)
 
     # Print table body.
     summary_ += parse_resource(sorted_resources[0])
@@ -199,6 +199,17 @@ class TecanDeck(Deck):
       summary_ += parse_resource(resource)
 
     return summary_
+
+  def clear(self, include_trash: bool = False):
+    """Clear the deck, removing all resources except the trash areas."""
+    children_names = [child.name for child in self.children]
+    for resource_name in children_names:
+      resource = self.get_resource(resource_name)
+      if isinstance(resource, Trash) and not include_trash:
+        continue
+      if resource.name == "wash_station":
+        continue
+      resource.unassign()
 
 
 def EVO100Deck(origin: Coordinate = Coordinate(0, 0, 0)) -> TecanDeck:

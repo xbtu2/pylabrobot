@@ -3,7 +3,7 @@ import math
 import time
 from typing import Any, Awaitable, Callable, Coroutine, Dict, Literal, Optional, Tuple, Union, cast
 
-from pylabrobot.machines import Machine
+from pylabrobot.machines import Machine, need_setup_finished
 from pylabrobot.plate_reading.backend import ImagerBackend
 from pylabrobot.plate_reading.standard import (
   AutoExposure,
@@ -17,7 +17,7 @@ from pylabrobot.plate_reading.standard import (
   NoPlateError,
   Objective,
 )
-from pylabrobot.resources import Plate, Resource, Well
+from pylabrobot.resources import Plate, Resource, Rotation, Well
 
 try:
   import cv2  # type: ignore
@@ -29,7 +29,7 @@ except ImportError as e:
   _CV2_IMPORT_ERROR = e
 
 try:
-  import numpy as np
+  import numpy as np  # type: ignore
 except ImportError:
   np = None  # type: ignore[assignment]
 
@@ -82,6 +82,7 @@ class Imager(Resource, Machine):
     size_y: float,
     size_z: float,
     backend: ImagerBackend,
+    rotation: Optional[Rotation] = None,
     category: Optional[str] = None,
     model: Optional[str] = None,
   ):
@@ -91,6 +92,7 @@ class Imager(Resource, Machine):
       size_x=size_x,
       size_y=size_y,
       size_z=size_z,
+      rotation=rotation,
       category=category,
       model=model,
     )
@@ -102,7 +104,7 @@ class Imager(Resource, Machine):
   def _will_assign_resource(self, resource: Resource):
     if len(self.children) >= 1:
       raise ValueError(
-        f"Imager {self} already has a plate assigned " f"(attempting to assign {resource})"
+        f"Imager {self} already has a plate assigned (attempting to assign {resource})"
       )
 
   def get_plate(self) -> Plate:
@@ -209,6 +211,7 @@ class Imager(Resource, Machine):
     )
     return await local_capture(best_focal_height)
 
+  @need_setup_finished
   async def capture(
     self,
     well: Union[Well, Tuple[int, int]],
@@ -219,7 +222,9 @@ class Imager(Resource, Machine):
     gain: Gain = "machine-auto",
     **backend_kwargs,
   ) -> ImagingResult:
-    if not isinstance(exposure_time, (int, float, AutoExposure)):
+    if exposure_time != "machine-auto" and not isinstance(
+      exposure_time, (int, float, AutoExposure)
+    ):
       raise TypeError(f"Invalid exposure time: {exposure_time}")
     if (
       not isinstance(focal_height, (int, float))
@@ -250,9 +255,9 @@ class Imager(Resource, Machine):
       )
 
     if isinstance(focal_height, AutoFocus):
-      assert isinstance(
-        exposure_time, (int, float)
-      ), "Exposure time must be specified for auto focus"
+      assert isinstance(exposure_time, (int, float)), (
+        "Exposure time must be specified for auto focus"
+      )
       assert gain != "machine-auto", "Gain must be specified for auto focus"
       return await self._capture_auto_focus(
         well=well,

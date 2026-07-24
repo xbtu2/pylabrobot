@@ -11,6 +11,7 @@ from pylabrobot.resources import (
   create_equally_spaced_2d,
   create_ordered_items_2d,
 )
+from pylabrobot.resources.plate import Lid
 
 if sys.version_info >= (3, 8):
   from typing import Literal
@@ -44,21 +45,21 @@ class TestItemizedResource(unittest.TestCase):
 
   def test_initialize_with_wells(self):
     self.assertEqual(len(self.plate.children), 96)
-    self.assertEqual(self.plate.children[0].name, "plate_well_0_0")
-    self.assertEqual(self.plate.children[95].name, "plate_well_11_7")
+    self.assertEqual(self.plate.children[0].name, "plate_well_A1")
+    self.assertEqual(self.plate.children[95].name, "plate_well_H12")
 
   def test_get_item_int(self):
-    self.assertEqual(self.plate.get_item(0).name, "plate_well_0_0")
-    self.assertEqual(self.plate.get_item(95).name, "plate_well_11_7")
+    self.assertEqual(self.plate.get_item(0).name, "plate_well_A1")
+    self.assertEqual(self.plate.get_item(95).name, "plate_well_H12")
 
   def test_get_item_str(self):
-    self.assertEqual(self.plate.get_item("A1").name, "plate_well_0_0")
-    self.assertEqual(self.plate.get_item("B1").name, "plate_well_0_1")
-    self.assertEqual(self.plate.get_item("A2").name, "plate_well_1_0")
+    self.assertEqual(self.plate.get_item("A1").name, "plate_well_A1")
+    self.assertEqual(self.plate.get_item("B1").name, "plate_well_B1")
+    self.assertEqual(self.plate.get_item("A2").name, "plate_well_A2")
 
   def test_get_item_tuple(self):
-    self.assertEqual(self.plate.get_item((0, 0)).name, "plate_well_0_0")
-    self.assertEqual(self.plate.get_item((7, 11)).name, "plate_well_11_7")
+    self.assertEqual(self.plate.get_item((0, 0)).name, "plate_well_A1")
+    self.assertEqual(self.plate.get_item((7, 11)).name, "plate_well_H12")
 
   def test_well_get_absolute_location(self):
     self.assertEqual(
@@ -83,23 +84,23 @@ class TestItemizedResource(unittest.TestCase):
     )
 
   def test_getitem_int(self):
-    self.assertEqual(self.plate[0][0].name, "plate_well_0_0")
+    self.assertEqual(self.plate[0][0].name, "plate_well_A1")
 
   def test_getitem_str(self):
-    self.assertEqual(self.plate["A1"][0].name, "plate_well_0_0")
-    self.assertEqual(self.plate["B2"][0].name, "plate_well_1_1")
+    self.assertEqual(self.plate["A1"][0].name, "plate_well_A1")
+    self.assertEqual(self.plate["B2"][0].name, "plate_well_B2")
 
   def test_getitem_slice(self):
     self.assertEqual(
       [w.name for w in self.plate[0:7]],
       [
-        "plate_well_0_0",
-        "plate_well_0_1",
-        "plate_well_0_2",
-        "plate_well_0_3",
-        "plate_well_0_4",
-        "plate_well_0_5",
-        "plate_well_0_6",
+        "plate_well_A1",
+        "plate_well_B1",
+        "plate_well_C1",
+        "plate_well_D1",
+        "plate_well_E1",
+        "plate_well_F1",
+        "plate_well_G1",
       ],
     )
 
@@ -107,13 +108,13 @@ class TestItemizedResource(unittest.TestCase):
     self.assertEqual(
       [w.name for w in self.plate[range(7)]],
       [
-        "plate_well_0_0",
-        "plate_well_0_1",
-        "plate_well_0_2",
-        "plate_well_0_3",
-        "plate_well_0_4",
-        "plate_well_0_5",
-        "plate_well_0_6",
+        "plate_well_A1",
+        "plate_well_B1",
+        "plate_well_C1",
+        "plate_well_D1",
+        "plate_well_E1",
+        "plate_well_F1",
+        "plate_well_G1",
       ],
     )
 
@@ -121,10 +122,10 @@ class TestItemizedResource(unittest.TestCase):
     self.assertEqual(
       [w.name for w in self.plate["A1:B2"]],
       [
-        "plate_well_0_0",
-        "plate_well_1_0",
-        "plate_well_0_1",
-        "plate_well_1_1",
+        "plate_well_A1",
+        "plate_well_A2",
+        "plate_well_B1",
+        "plate_well_B2",
       ],
     )
 
@@ -137,49 +138,49 @@ class TestItemizedResource(unittest.TestCase):
   def test_getitem_tuple_int(self):
     self.assertEqual(
       [w.name for w in self.plate[0, 4, 1]],
-      ["plate_well_0_0", "plate_well_0_4", "plate_well_0_1"],
+      ["plate_well_A1", "plate_well_E1", "plate_well_B1"],
     )
 
   def test_getitem_tuple_str(self):
     self.assertEqual(
       [w.name for w in self.plate["A1", "B2", "A2"]],
-      ["plate_well_0_0", "plate_well_1_1", "plate_well_1_0"],
+      ["plate_well_A1", "plate_well_B2", "plate_well_A2"],
     )
 
   def test_get_row(self):
     self.assertEqual(
       [w.name for w in self.plate.row(0)],
       [
-        "plate_well_0_0",
-        "plate_well_1_0",
-        "plate_well_2_0",
-        "plate_well_3_0",
-        "plate_well_4_0",
-        "plate_well_5_0",
-        "plate_well_6_0",
-        "plate_well_7_0",
-        "plate_well_8_0",
-        "plate_well_9_0",
-        "plate_well_10_0",
-        "plate_well_11_0",
+        "plate_well_A1",
+        "plate_well_A2",
+        "plate_well_A3",
+        "plate_well_A4",
+        "plate_well_A5",
+        "plate_well_A6",
+        "plate_well_A7",
+        "plate_well_A8",
+        "plate_well_A9",
+        "plate_well_A10",
+        "plate_well_A11",
+        "plate_well_A12",
       ],
     )
 
     self.assertEqual(
       [w.name for w in self.plate.row(3)],
       [
-        "plate_well_0_3",
-        "plate_well_1_3",
-        "plate_well_2_3",
-        "plate_well_3_3",
-        "plate_well_4_3",
-        "plate_well_5_3",
-        "plate_well_6_3",
-        "plate_well_7_3",
-        "plate_well_8_3",
-        "plate_well_9_3",
-        "plate_well_10_3",
-        "plate_well_11_3",
+        "plate_well_D1",
+        "plate_well_D2",
+        "plate_well_D3",
+        "plate_well_D4",
+        "plate_well_D5",
+        "plate_well_D6",
+        "plate_well_D7",
+        "plate_well_D8",
+        "plate_well_D9",
+        "plate_well_D10",
+        "plate_well_D11",
+        "plate_well_D12",
       ],
     )
 
@@ -203,30 +204,137 @@ class TestItemizedResource(unittest.TestCase):
     self.assertEqual(
       [w.name for w in self.plate.column(0)],
       [
-        "plate_well_0_0",
-        "plate_well_0_1",
-        "plate_well_0_2",
-        "plate_well_0_3",
-        "plate_well_0_4",
-        "plate_well_0_5",
-        "plate_well_0_6",
-        "plate_well_0_7",
+        "plate_well_A1",
+        "plate_well_B1",
+        "plate_well_C1",
+        "plate_well_D1",
+        "plate_well_E1",
+        "plate_well_F1",
+        "plate_well_G1",
+        "plate_well_H1",
       ],
     )
 
     self.assertEqual(
       [w.name for w in self.plate.column(3)],
       [
-        "plate_well_3_0",
-        "plate_well_3_1",
-        "plate_well_3_2",
-        "plate_well_3_3",
-        "plate_well_3_4",
-        "plate_well_3_5",
-        "plate_well_3_6",
-        "plate_well_3_7",
+        "plate_well_A4",
+        "plate_well_B4",
+        "plate_well_C4",
+        "plate_well_D4",
+        "plate_well_E4",
+        "plate_well_F4",
+        "plate_well_G4",
+        "plate_well_H4",
       ],
     )
+
+
+class TestItemizedResource1536(unittest.TestCase):
+  """Test ItemizedResource with a 1536-well plate (>26 rows)."""
+
+  plate: Plate
+
+  @classmethod
+  def setUpClass(cls) -> None:
+    cls.plate = Plate(
+      "plate_1536",
+      size_x=127.8,
+      size_y=85.5,
+      size_z=8.6,
+      ordered_items=create_ordered_items_2d(
+        Well,
+        num_items_x=48,
+        num_items_y=32,
+        dx=9.85,
+        dy=6.75,
+        dz=0.0,
+        item_dx=2.3,
+        item_dy=2.3,
+        size_x=2.3,
+        size_y=2.3,
+        size_z=8.6,
+      ),
+    )
+
+  def test_num_items(self):
+    self.assertEqual(self.plate.num_items, 1536)
+    self.assertEqual(self.plate.num_items_x, 48)
+    self.assertEqual(self.plate.num_items_y, 32)
+
+  def test_identifiers(self):
+    keys = list(self.plate._ordering.keys())
+    self.assertEqual(keys[0], "A1")
+    self.assertEqual(keys[25], "Z1")
+    self.assertEqual(keys[26], "AA1")
+    self.assertEqual(keys[31], "AF1")
+    self.assertEqual(keys[-1], "AF48")
+
+  def test_get_item_str(self):
+    self.assertEqual(self.plate.get_item("A1").name, "plate_1536_well_A1")
+    self.assertEqual(self.plate.get_item("AA1").name, "plate_1536_well_AA1")
+    self.assertEqual(self.plate.get_item("AF48").name, "plate_1536_well_AF48")
+
+  def test_get_item_tuple(self):
+    self.assertEqual(self.plate.get_item((0, 0)).name, "plate_1536_well_A1")
+    self.assertEqual(self.plate.get_item((26, 0)).name, "plate_1536_well_AA1")
+    self.assertEqual(self.plate.get_item((31, 47)).name, "plate_1536_well_AF48")
+
+  def test_row_by_str(self):
+    row_aa = self.plate.row("AA")
+    self.assertEqual(len(row_aa), 48)
+    self.assertEqual(row_aa[0].name, "plate_1536_well_AA1")
+    self.assertEqual(row_aa[47].name, "plate_1536_well_AA48")
+
+  def test_row_by_int(self):
+    row_26 = self.plate.row(26)
+    self.assertEqual(row_26[0].name, "plate_1536_well_AA1")
+
+  def test_row_out_of_range(self):
+    with self.assertRaises(ValueError):
+      self.plate.row("AG")
+    with self.assertRaises(ValueError):
+      self.plate.row(32)
+
+  def test_get_child_row(self):
+    well_aa1 = self.plate.get_item("AA1")
+    self.assertEqual(self.plate.get_child_row(well_aa1), 26)
+
+    well_af48 = self.plate.get_item("AF48")
+    self.assertEqual(self.plate.get_child_row(well_af48), 31)
+
+
+class TestItemizedResourceWithLid(unittest.TestCase):
+  def setUp(self) -> None:
+    self.plate = Plate(
+      "plate",
+      size_x=127,
+      size_y=86,
+      size_z=15,
+      lid=Lid("lid", size_x=127, size_y=86, size_z=10, nesting_z_height=2),
+      ordered_items=create_ordered_items_2d(
+        Well,
+        num_items_x=12,
+        num_items_y=8,
+        dx=0,
+        dy=0,
+        dz=0,
+        item_dx=9,
+        item_dy=9,
+        size_x=9,
+        size_y=9,
+        size_z=9,
+      ),
+    )
+
+  def test_num_items_excludes_lid(self):
+    self.assertEqual(self.plate.num_items, 96)
+
+  def test_get_all_items_excludes_lid(self):
+    items = self.plate.get_all_items()
+    self.assertEqual(len(items), 96)
+    for item in items:
+      self.assertNotIsInstance(item, Lid)
 
 
 class TestCreateEquallySpaced(unittest.TestCase):

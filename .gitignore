@@ -1,6 +1,6 @@
 *.pyc
 *__pycache__
-*.DS_store
+*.DS_Store
 *.swp
 *.swo
 build/pdf-intermediate.md
@@ -13,3 +13,4 @@ build/lib
 myenv
 env/*
 .venv
+.env

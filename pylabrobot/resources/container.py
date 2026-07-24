@@ -1,14 +1,19 @@
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from pylabrobot.serializer import serialize
+from pylabrobot.utils.interpolation import interpolate_1d
 
 from .coordinate import Coordinate
+from .lid import Liddable
 from .resource import Resource
 from .volume_tracker import VolumeTracker
 
 
-class Container(Resource):
-  """A container is an abstract base class for a resource that can hold liquid."""
+class Container(Liddable, Resource):
+  """A container is an abstract base class for a resource that can hold liquid.
+
+  Via the :class:`Liddable` mixin, a container (trough, tube, petri dish, well) can host a lid.
+  """
 
   def __init__(
     self,
@@ -22,6 +27,8 @@ class Container(Resource):
     model: Optional[str] = None,
     compute_volume_from_height: Optional[Callable[[float], float]] = None,
     compute_height_from_volume: Optional[Callable[[float], float]] = None,
+    height_volume_data: Optional[Dict[float, float]] = None,
+    no_go_zones: Optional[List[Tuple[Coordinate, Coordinate]]] = None,
   ):
     """Create a new container.
 
@@ -29,6 +36,13 @@ class Container(Resource):
       material_z_thickness: Container cavity base to the (outer) base of the container object. If
         `None`, certain operations may not be supported.
       max_volume: Maximum volume of the container. If `None`, will be inferred from resource size.
+      height_volume_data: Optional dict mapping height (mm) to volume (uL). When provided,
+        ``compute_volume_from_height`` and ``compute_height_from_volume`` are auto-generated
+        via piecewise-linear interpolation if not explicitly passed. The data is also available
+        for direct use (e.g. building firmware segments from calibration knots).
+      no_go_zones: List of cuboid regions within the container where tips must not be positioned.
+        Each zone is a tuple of two Coordinates: (front_left_bottom, back_right_top), relative to
+        the container's front-left-bottom origin.
     """
 
     super().__init__(
@@ -40,10 +54,80 @@ class Container(Resource):
       model=model,
     )
     self._material_z_thickness = material_z_thickness
+    self.height_volume_data = (
+      {float(h): float(v) for h, v in height_volume_data.items()}
+      if height_volume_data is not None
+      else None
+    )
+
+    # Auto-generate volume/height functions from height_volume_data if not explicitly provided.
+    if self.height_volume_data is not None:
+      hvd = self.height_volume_data
+      sorted_heights = sorted(hvd.keys())
+      sorted_volumes = [hvd[h] for h in sorted_heights]
+      if len(sorted_heights) < 2:
+        raise ValueError("height_volume_data must contain at least 2 points.")
+      if any(sorted_volumes[i] >= sorted_volumes[i + 1] for i in range(len(sorted_volumes) - 1)):
+        raise ValueError("height_volume_data volumes must be strictly increasing with height.")
+      volume_height_data = {v: h for h, v in hvd.items()}
+
+      if compute_volume_from_height is None:
+
+        def compute_volume_from_height(h: float) -> float:
+          return interpolate_1d(h, hvd, bounds_handling="error")
+
+      if compute_height_from_volume is None:
+
+        def compute_height_from_volume(v: float) -> float:
+          return interpolate_1d(v, volume_height_data, bounds_handling="error")
+
     self.max_volume = max_volume or (size_x * size_y * size_z)
     self.tracker = VolumeTracker(thing=f"{self.name}_volume_tracker", max_volume=self.max_volume)
+    # Notify state-update subscribers (e.g. the Visualizer) on volume changes; without this
+    # a bare Container like a Trough updates its volume internally but never broadcasts it.
+    self.tracker.register_callback(self._state_updated)
     self._compute_volume_from_height = compute_volume_from_height
     self._compute_height_from_volume = compute_height_from_volume
+    self.no_go_zones: List[Tuple[Coordinate, Coordinate]] = self._validate_no_go_zones(
+      no_go_zones or []
+    )
+
+  def _validate_no_go_zones(
+    self, zones: List[Tuple[Coordinate, Coordinate]]
+  ) -> List[Tuple[Coordinate, Coordinate]]:
+    """Validate no-go zones to ensure they are inside the container and well-formed.
+
+    Each zone is defined as (front_left_bottom, back_right_top).
+    """
+    validated: List[Tuple[Coordinate, Coordinate]] = []
+    for idx, (flb, brt) in enumerate(zones):
+      if not isinstance(flb, Coordinate) or not isinstance(brt, Coordinate):
+        raise TypeError(
+          f"no_go_zones[{idx}] must be a tuple of Coordinate instances, got {type(flb)!r}, {type(brt)!r}."
+        )
+
+      # Ensure front-left-bottom is not beyond back-right-top on any axis.
+      if flb.x > brt.x or flb.y > brt.y or flb.z > brt.z:
+        raise ValueError(
+          f"no_go_zones[{idx}] has invalid ordering: front_left_bottom must not exceed "
+          f"back_right_top on any axis (flb={flb}, brt={brt})."
+        )
+
+      # Ensure all coordinates lie within the container bounds.
+      for coord_label, coord in (("flb", flb), ("brt", brt)):
+        if coord.x < 0 or coord.y < 0 or coord.z < 0:
+          raise ValueError(f"no_go_zones[{idx}].{coord_label} has negative coordinates: {coord}.")
+        if (
+          coord.x > self.get_size_x() or coord.y > self.get_size_y() or coord.z > self.get_size_z()
+        ):
+          raise ValueError(
+            f"no_go_zones[{idx}].{coord_label}={coord} is outside the container bounds "
+            f"(size_x={self.get_size_x()}, size_y={self.get_size_y()}, size_z={self.get_size_z()})."
+          )
+
+      validated.append((flb, brt))
+
+    return validated
 
   @property
   def material_z_thickness(self) -> float:
@@ -59,15 +143,30 @@ class Container(Resource):
       **super().serialize(),
       "max_volume": serialize(self.max_volume),
       "material_z_thickness": self._material_z_thickness,
-      "compute_volume_from_height": serialize(self._compute_volume_from_height),
-      "compute_height_from_volume": serialize(self._compute_height_from_volume),
+      "compute_volume_from_height": None
+      if self.height_volume_data is not None
+      else serialize(self._compute_volume_from_height),
+      "compute_height_from_volume": None
+      if self.height_volume_data is not None
+      else serialize(self._compute_height_from_volume),
+      "height_volume_data": self.height_volume_data,
+      "no_go_zones": [(flb.serialize(), brt.serialize()) for flb, brt in self.no_go_zones],
     }
 
   def serialize_state(self) -> Dict[str, Any]:
-    return self.tracker.serialize()
+    return {**super().serialize_state(), **self.tracker.serialize()}
 
   def load_state(self, state: Dict[str, Any]):
-    self.tracker.load_state(state)
+    super().load_state(state)
+    # The tracker only consumes its own keys; extras (e.g. "rotation") are
+    # already handled by ``super().load_state``.
+    tracker_state = {k: v for k, v in state.items() if k != "rotation"}
+    self.tracker.load_state(tracker_state)
+
+  def supports_compute_height_volume_functions(self) -> bool:
+    return (
+      self._compute_volume_from_height is not None and self._compute_height_from_volume is not None
+    )
 
   def compute_volume_from_height(self, height: float) -> float:
     """Compute the volume of liquid in a container from the height of the liquid relative to the

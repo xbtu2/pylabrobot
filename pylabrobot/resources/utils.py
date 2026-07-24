@@ -1,11 +1,80 @@
 import re
-from string import ascii_uppercase as LETTERS
-from typing import Dict, List, Optional, Type, TypeVar
+from itertools import groupby
+from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar
 
 from pylabrobot.resources.coordinate import Coordinate
 from pylabrobot.resources.resource import Resource
 
 T = TypeVar("T", bound=Resource)
+
+
+def row_index_to_label(index: int) -> str:
+  """Convert a 0-based row index to a letter label.
+
+  Follows the same convention as Excel column headers:
+  0->A, 1->B, ..., 25->Z, 26->AA, 27->AB, ..., 31->AF, ...
+
+  >>> row_index_to_label(0)
+  'A'
+  >>> row_index_to_label(25)
+  'Z'
+  >>> row_index_to_label(26)
+  'AA'
+  >>> row_index_to_label(31)
+  'AF'
+  """
+  if index < 0:
+    raise ValueError(f"Row index must be non-negative, got {index}")
+  if index < 26:
+    return chr(ord("A") + index)
+  return chr(ord("A") + index // 26 - 1) + chr(ord("A") + index % 26)
+
+
+def label_to_row_index(label: str) -> int:
+  """Convert a letter label to a 0-based row index.
+
+  Inverse of :func:`row_index_to_label`.
+
+  >>> label_to_row_index('A')
+  0
+  >>> label_to_row_index('Z')
+  25
+  >>> label_to_row_index('AA')
+  26
+  >>> label_to_row_index('AF')
+  31
+  """
+  label = label.upper()
+  if len(label) == 1:
+    return ord(label) - ord("A")
+  if len(label) == 2:
+    return (ord(label[0]) - ord("A") + 1) * 26 + (ord(label[1]) - ord("A"))
+  raise ValueError(f"Row labels longer than 2 characters are not supported: '{label}'")
+
+
+def split_identifier(identifier: str) -> Tuple[str, str]:
+  """Split a well identifier into its row-letter and column-number parts.
+
+  Validates that the identifier is in transposed Excel style notation
+  (one or more letters followed by one or more digits, e.g. 'A1', 'AF48').
+
+  >>> split_identifier('A1')
+  ('A', '1')
+  >>> split_identifier('AF48')
+  ('AF', '48')
+
+  Raises:
+    ValueError: If the identifier is not in transposed Excel style notation.
+  """
+  for i, ch in enumerate(identifier):
+    if ch.isdigit():
+      row_part, col_part = identifier[:i], identifier[i:]
+      if row_part.isalpha() and col_part.isdigit():
+        return row_part, col_part
+      break
+  raise ValueError(
+    f"Identifier '{identifier}' is not in transposed Excel style notation, e.g. 'A1'."
+  )
 
 
 def create_equally_spaced_2d(
@@ -15,8 +84,8 @@ def create_equally_spaced_2d(
   dx: float,
   dy: float,
   dz: float,
-  item_dx: float,
-  item_dy: float,
+  item_dx: Optional[float],
+  item_dy: Optional[float],
   **kwargs,
 ) -> List[List[T]]:
   """Make equally spaced resources in a 2D grid. Also see :meth:`create_equally_spaced_x` and
@@ -29,8 +98,8 @@ def create_equally_spaced_2d(
     dx: The bottom left corner for items in the left column
     dy: The bottom left corner for items in the bottom row
     dz: The z coordinate for all items
-    item_dx: The size of the items in the x direction
-    item_dy: The size of the items in the y direction
+    item_dx: The spacing of the items in the x direction (origin to origin), or None when num_items_x is 1
+    item_dy: The spacing of the items in the y direction (origin to origin), or None when num_items_y is 1
     **kwargs: Additional keyword arguments to pass to the resource constructor
 
   Returns:
@@ -40,6 +109,13 @@ def create_equally_spaced_2d(
 
   # TODO: It probably makes more sense to transpose this.
 
+  if num_items_x > 1 and item_dx is None:
+    raise ValueError("item_dx is required (got None) when num_items_x > 1")
+  if num_items_y > 1 and item_dy is None:
+    raise ValueError("item_dy is required (got None) when num_items_y > 1")
+  spacing_x = 0.0 if item_dx is None else item_dx
+  spacing_y = 0.0 if item_dy is None else item_dy
+
   items: List[List[T]] = []
   for i in range(num_items_x):
     items.append([])
@@ -47,8 +123,8 @@ def create_equally_spaced_2d(
       name = f"{klass.__name__.lower()}_{i}_{j}"
       item = klass(name=name, **kwargs)
       item.location = Coordinate(
-        x=dx + i * item_dx,
-        y=dy + (num_items_y - j - 1) * item_dy,
+        x=dx + i * spacing_x,
+        y=dy + (num_items_y - j - 1) * spacing_y,
         z=dz,
       )
       items[i].append(item)
@@ -62,7 +138,7 @@ def create_equally_spaced_x(
   dx: float,
   dy: float,
   dz: float,
-  item_dx: float,
+  item_dx: Optional[float],
   **kwargs,
 ) -> List[T]:
   """Make equally spaced resources over the x-axis. See :meth:`create_equally_spaced_2d` for more
@@ -74,7 +150,7 @@ def create_equally_spaced_x(
     dx: The bottom left corner for items in the left column
     dy: The bottom left corner for items in the bottom row
     dz: The z coordinate for all items
-    item_dx: The size of the items in the x direction
+    item_dx: The spacing of the items in the x direction (origin to origin), or None when num_items_x is 1
     **kwargs: Additional keyword arguments to pass to the resource constructor
 
   Returns:
@@ -89,7 +165,7 @@ def create_equally_spaced_x(
     dy=dy,
     dz=dz,
     item_dx=item_dx,
-    item_dy=0,
+    item_dy=None,
     **kwargs,
   )
   return [items[i][0] for i in range(num_items_x)]
@@ -101,7 +177,7 @@ def create_equally_spaced_y(
   dx: float,
   dy: float,
   dz: float,
-  item_dy: float,
+  item_dy: Optional[float],
   **kwargs,
 ) -> List[T]:
   """Make equally spaced resources over the y-axis. See :meth:`create_equally_spaced_2d` for more
@@ -113,7 +189,7 @@ def create_equally_spaced_y(
     dx: The bottom left corner for items in the left column
     dy: The bottom left corner for items in the bottom row
     dz: The z coordinate for all items
-    item_dy: The size of the items in the y direction
+    item_dy: The spacing of the items in the y direction (origin to origin), or None when num_items_y is 1
     **kwargs: Additional keyword arguments to pass to the resource constructor
 
   Returns:
@@ -127,7 +203,7 @@ def create_equally_spaced_y(
     dx=dx,
     dy=dy,
     dz=dz,
-    item_dx=0,
+    item_dx=None,
     item_dy=item_dy,
     **kwargs,
   )
@@ -141,8 +217,8 @@ def create_ordered_items_2d(
   dx: float,
   dy: float,
   dz: float,
-  item_dx: float,
-  item_dy: float,
+  item_dx: Optional[float],
+  item_dy: Optional[float],
   **kwargs,
 ) -> Dict[str, T]:
   """Make ordered resources in a 2D grid, with the keys being the identifiers in transposed
@@ -155,8 +231,8 @@ def create_ordered_items_2d(
     dx: The bottom left corner for items in the left column wrt the parent
     dy: The bottom left corner for items in the bottom row wrt the parent
     dz: The z coordinate for all items
-    item_dx: The spacing of the items in the x direction (center to center)
-    item_dy: The spacing of the items in the y direction (center to center)
+    item_dx: The spacing of the items in the x direction (origin to origin), or None when num_items_x is 1
+    item_dy: The spacing of the items in the y direction (origin to origin), or None when num_items_y is 1
     **kwargs: Additional keyword arguments to pass to the resource constructor
 
   Returns:
@@ -175,7 +251,9 @@ def create_ordered_items_2d(
     item_dy=item_dy,
     **kwargs,
   )
-  keys = [f"{LETTERS[j]}{i+1}" for i in range(num_items_x) for j in range(num_items_y)]
+  keys = [f"{row_index_to_label(j)}{i + 1}" for i in range(num_items_x) for j in range(num_items_y)]
+  for key, item in zip(keys, (item for sublist in items for item in sublist)):
+    item.name = f"{klass.__name__.lower()}_{key}"
   return dict(zip(keys, [item for sublist in items for item in sublist]))
 
 
@@ -225,3 +303,75 @@ def query(
       )
     )
   return matched
+
+
+R = TypeVar("R", bound=Resource)
+
+
+def sort_by_xy_and_chunk_by_x(
+  resources: list[R],
+  max_chunk_size: int,
+  sort_chunks_by_size: bool = True,
+) -> list[list[R]]:
+  """
+  Sort resources spatially and partition them into chunks for channel processing.
+
+  Procedure
+  ---------
+  1. Sort all resources by:
+      - x ascending
+      - y descending within each x
+  2. Group resources into chunks based on identical x values.
+  3. Split each chunk into sub-chunks of size <= max_chunk_size.
+  4. Optionally sort the resulting sub-chunks by their length (smallest -> largest).
+
+  Example:
+    >>> sorted_chunks = sort_by_xy_and_chunk_by_x(well_list, max_chunk_size=8)
+    >>> [
+    ...   list(
+    ...     zip(
+    ...       [r.get_identifier() for r in chunk],
+    ...       [r.get_absolute_location() for r in chunk],
+    ...     )
+    ...   )
+    ...   for chunk in sorted_chunks
+    ... ]
+    [[('D1', Coordinate(x=450.9, y=402.3, z=164.45)),
+      ('H1', Coordinate(x=450.9, y=366.3, z=164.45)), ...],
+    [('D2', Coordinate(x=459.9, y=402.3, z=164.45)), ...]]
+
+  Args:
+    resources: List of resources that implement ``.get_absolute_location()``, returning an object with ``x`` and ``y`` attributes.
+    max_chunk_size: Maximum allowed size for any produced chunk or sub-chunk.
+    sort_chunks_by_size: If True (default), the output list of chunks is sorted by ascending chunk size. If False, chunks retain their original order.
+
+  Returns:
+    A list of grouped and sorted resources.
+  """
+
+  # 1. & 2.: Sort by x ascending, y descending
+  sorted_resources_with_loc = sorted(
+    resources,
+    key=lambda r: (
+      r.get_absolute_location().x,
+      -r.get_absolute_location().y,
+    ),
+  )
+
+  # 3. Group into chunks by x
+  grouped_by_x = [
+    list(group)
+    for _, group in groupby(
+      sorted_resources_with_loc,
+      key=lambda r: r.get_absolute_location().x,
+    )
+  ]
+
+  # 4. Split chunks by max_chunk_size
+  split_chunks: list[list[Any]] = []
+  for chunk in grouped_by_x:
+    for i in range(0, len(chunk), max_chunk_size):
+      split_chunks.append(chunk[i : i + max_chunk_size])
+
+  # Optional 5: Sort chunks by number of elements
+  return sorted(split_chunks, key=len) if sort_chunks_by_size else split_chunks
